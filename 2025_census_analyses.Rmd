@@ -17,8 +17,10 @@ library(janitor)
 library(broom)
 library(lubridate)
 library(cancensus)
+options(cancensus.api_key = "CensusMapper_9cd8925d1dd9197227f4bfaf596e0797")
 library(here)
 library(readxl)
+library(stringr)
 
 partial_data_25<- read_excel("Anonymized_Data/2025_12_partial_data.xlsx")
 
@@ -46,7 +48,9 @@ census_clean<- partial_data_25 %>%
           vision_hearing_delays= does_your_child_have_any_hearing_or_vision_problems_or_developmental_delays,
           school_daycare_attendance = does_your_child_currently_attend_school_including_homeschooling_or_daycare_garderie,
           school_language =  what_is_the_primary_language_spoken_at_your_childs_school, 
-          daycare_language= what_is_the_primary_language_spoken_at_your_childs_daycare)
+          daycare_language= what_is_the_primary_language_spoken_at_your_childs_daycare,
+          school_min_language= please_explain_32,
+          daycare_min_language = please_explain_34)
 #>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 
@@ -95,7 +99,19 @@ census_clean <- census_clean %>%
          n_bi_books_eng_min = how_many_bilingual_books_that_is_books_in_which_the_story_is_written_in_two_languages_does_your_child_have_in_the_following_languages_english_and_a_minority_language,
          n_bi_books_fre_min =how_many_bilingual_books_that_is_books_in_which_the_story_is_written_in_two_languages_does_your_child_have_in_the_following_languages_french_and_a_minority_language,
          n_bi_books_min_min =how_many_bilingual_books_that_is_books_in_which_the_story_is_written_in_two_languages_does_your_child_have_in_the_following_languages_two_minority_languages)
+
 #>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+#Now let's clean the parents attitudes and concerns variables
+
+
+
+
+
+
+
+#>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
 
 #Now let's get dates into the correct format and calculate age
 census_clean$submitted_date<- as.Date(census_clean$submitted_date)
@@ -110,12 +126,12 @@ census_clean$child_age_years <- time_length(
 #Let's select the variables we are going to use for the analyses in this manuscript. Build a base data frame into which to add the wrangled predictors
 
 df_base<- census_clean %>%
-  select(internal_id, status, child_age_years, child_gender, other_caregiver, child_speaks_minority_languages, vision_hearing_delays, school_daycare_attendance, school_language, daycare_language, where_do_you_live, child_english, c1_english_percent, c2_english_percent, child_french, c1_french_percent, c2_french_percent, first_minority_language, c1_first_minority_percent, c2_first_minority_percent, second_minority_language,c1_second_minority_percent, c2_second_minority_percent, third_minority_language, c1_third_minority_percent, c2_third_minority_percent) %>%
+  select(internal_id, status, child_age_years, child_gender, other_caregiver, child_speaks_minority_languages, vision_hearing_delays, school_daycare_attendance, school_language, daycare_language,school_min_language,daycare_min_language, where_do_you_live, child_english, c1_english_percent, c2_english_percent, child_french, c1_french_percent, c2_french_percent, first_minority_language, c1_first_minority_percent, c2_first_minority_percent, second_minority_language,c1_second_minority_percent, c2_second_minority_percent, third_minority_language, c1_third_minority_percent, c2_third_minority_percent) %>%
   filter(status == "Submitted", vision_hearing_delays !="Yes"|is.na(vision_hearing_delays))
 #>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 #Now let's wrangle and add # of language sources for each language
-df_base <- df_base %>%
+df_base_sources <- df_base %>%
   #Identifying which caregivers speak the minority language
   mutate(english_c_sources = case_when(c1_english_percent >=25 & c2_english_percent>=25 ~ 2,
                                              c1_english_percent>=25| c2_english_percent>=25 ~ 1,
@@ -136,10 +152,85 @@ df_base <- df_base %>%
   
   mutate(english_s_sources = case_when(str_detect(tolower(school_language), "english") ~ 1,
                                              TRUE~ 0),
-         french_s_sources = case_when(tolower(school_language), "french" ~ 1,
-                                             TRUE~ 0)
-  )
+         french_s_sources = case_when(str_detect(tolower(school_language), "french") ~ 1,
+                                             TRUE~ 0),
+         first_min_s_sources = if_else(school_min_language == first_minority_language |
+    daycare_min_language == first_minority_language,
+    1, 0, missing = 0),
+    
+    second_min_s_sources = if_else(school_min_language == second_minority_language |
+    daycare_min_language == second_minority_language,
+    1, 0, missing = 0),
+    
+    third_min_s_sources = if_else(school_min_language == third_minority_language |
+    daycare_min_language == third_minority_language,
+    1, 0, missing = 0),
+  ) %>%
+  
+  mutate(overall_eng_sources = english_c_sources +english_s_sources,
+         overall_fre_sources = french_c_sources + french_s_sources,
+         overall_first_min_sources = first_min_c_sources + first_min_s_sources,
+         overall_second_min_sources = second_min_c_sources +second_min_s_sources,
+         overall_third_min_sources = third_min_c_sources +third_min_s_sources)
 
+
+
+```
+```{r adding census data- Language Agnostic}
+
+#Let's start by making a smaller data set that we could then merge into the larger data set
+
+df_base_census<- df_base_sources %>%
+  select(internal_id, where_do_you_live) 
+
+
+#The names from the census data do not match exactly our names so it is best to convert everything to regional codes
+
+#First for csd 
+qc_geo <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CSD",
+  vectors = "v_CA21_1"   # dummy vector just to retrieve geographies
+) %>%
+clean_names() %>%
+distinct(geo_uid, region_name)
+
+	
+qc_geo <- qc_geo  %>%
+
+mutate(
+place_clean = str_remove(region_name, "[(].*")
+    ) %>%
+  mutate( place_clean = str_remove(place_clean, "\\s+$"))
+
+
+df_base_census <- df_base_census %>%
+  mutate(place_clean = str_trim(where_do_you_live))
+
+df_base_geo <- df_base_census %>%
+  left_join(qc_geo, by = "place_clean")
+
+
+#Now Pulling CSD multilingualism data
+csd_multi <- get_census(
+  dataset = "CA21",
+  regions = list(PR="24"),
+  level = "CSD",
+  vectors = c(
+    total = "v_CA21_1",
+    bilingual = "v_CA21_436"
+  )
+) %>%
+  clean_names() %>%
+  mutate(multilingual_rate = bilingual / total) |>
+  select(geo_uid, multilingual_rate)
+
+
+#Matching CSD with our own dat
+
+multi_matched_census <- df_base_geo |>
+  left_join(csd_multi, by = "geo_uid")
 
 
 ```
