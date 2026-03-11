@@ -1,0 +1,28 @@
+{
+    "id": "806D4B0E",
+    "path": "~/Research/Census/2025_Census_paper/2025_census_analyses.Rmd",
+    "project_path": "2025_census_analyses.Rmd",
+    "type": "r_markdown",
+    "hash": "3670335654",
+    "contents": "",
+    "dirty": false,
+    "created": 1773169622372.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "138,71",
+        "scrollLine": "126",
+        "last_setup_crc32": "3957b682bb338d19"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1773173315,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1773173315673,
+    "read_only": false,
+    "read_only_alternatives": []
+}

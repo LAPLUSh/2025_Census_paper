@@ -1,0 +1,14 @@
+"0","#Now let's clean the book reading variables
+census_clean <- census_clean %>%
+  rename(books_in_eng = what_percentage_of_the_books_your_child_has_are_written_entirely_in_each_of_the_following_languages_english,
+         books_in_fre = what_percentage_of_the_books_your_child_has_are_written_entirely_in_each_of_the_following_languages_french,
+         books_in_first_mi = what_percentage_of_the_books_your_child_has_are_written_entirely_in_each_of_the_following_languages_first_minority_language,
+         books_in_second_mi = what_percentage_of_the_books_your_child_has_are_written_entirely_in_each_of_the_following_languages_second_minority_language,
+         books_in_third_mi = what_percentage_of_the_books_your_child_has_are_written_entirely_in_each_of_the_following_languages_third_minority_language,
+         
+         bi_books_fre-eng = how_many_bilingual_books_that_is_books_in_which_the_story_is_written_in_two_languages_does_your_child_have_in_the_following_languages_english_and_french,
+"
+"2","Error: unexpected '=' in:
+""         
+         bi_books_fre-eng =""
+"
