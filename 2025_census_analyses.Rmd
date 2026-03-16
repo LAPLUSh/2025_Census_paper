@@ -196,6 +196,17 @@ qc_geo <- get_census(
 clean_names() %>%
 distinct(geo_uid, region_name)
 
+
+
+qc_geo_cd <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CD",
+  vectors = "v_CA21_1"   # dummy vector just to retrieve geographies
+) %>%
+clean_names() %>%
+distinct(geo_uid, region_name)
+
 	
 qc_geo <- qc_geo  %>%
 
