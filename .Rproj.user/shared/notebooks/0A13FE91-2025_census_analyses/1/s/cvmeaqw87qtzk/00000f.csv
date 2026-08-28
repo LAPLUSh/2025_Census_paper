@@ -1,0 +1,27 @@
+"0","clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_active_use_category,
+        child_french_active_use_category,
+        child_first_minority_language_active_use_category,
+        child_second_minority_language_active_use_category,
+        child_third_minority_language_active_use_category
+      ),
+      ~ recode(
+        .x,
+        ""My child does not understand or speak this language"" = 0,
+        ""My child understands this language, but rarely speaks in it"" = 1,
+        ""My child speaks this language mainly when someone addresses them in that language"" = 2,
+        ""My child speaks this language spontaneously"" = 3
+      )
+    )
+  )
+"
+"1","[1m[33mError[39m in `.fun()`:[22m
+[38;5;252m[36mℹ[38;5;252m In argument: `across(...)`.[39m
+[1mCaused by error in `across()`:[22m
+[33m![39m Can't select columns that don't exist.
+[31m✖[39m Column `child_first_minority_language_active_use_category` doesn't exist.
+[90mRun `]8;;x-r-run:rlang::last_trace()rlang::last_trace()]8;;` to see where the error occurred.[39m
+"
