@@ -1,0 +1,384 @@
+---
+title: "First_collection_clean"
+author: "ASM"
+date: "2026-09-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loading packages and data}
+library(dplyr)
+library(tidylog)
+library(janitor)
+library(broom)
+library(lubridate)
+library(cancensus)
+options(cancensus.api_key = "CensusMapper_9cd8925d1dd9197227f4bfaf596e0797")
+library(here)
+library(readxl)
+library(stringr)
+
+first_collection<- read_excel("Anonymized_Data/full_first_collection.xlsx")
+column_clean_names<- read.csv("first_collection_cols_clean.csv")
+```
+```{r data clean}
+
+first_collection_clean<-clean_names(first_collection)
+
+#Keeping only the people who submitted the questionnaire, and manageing exclusions
+#need to find and exclude the tests
+#Need to decide on some of the people who answered yes on the delay question, like "my child uses glasses" I would keep
+first_collection_clean<- first_collection_clean %>%
+  dplyr::filter(status=="Submitted") %>%
+  dplyr::filter(does_your_child_have_any_hearing_or_vision_problems_or_developmental_delays== "No")
+
+
+#Now let's select only the columns of data that we need
+
+columns_drop<- c(2,3,4,5,7,10,11,12,15,17,20,25,26,27,28,36,37,38,39,40, 41,42,43,50,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,97,98,100,104,105,106,107,115,116,118,122,123,130,132,133,135,139,140,147,149,150,152,156,157,164,167,166,169,173,174,186,188,190,191,197,199,200,201)
+
+
+
+first_collection_clean<- first_collection_clean%>%
+  dplyr::select(-all_of(columns_drop))
+
+
+# write.csv(
+#   first_collection_clean,
+#   here("Anonymized_Data/first_collection_clean.csv"),
+#   row.names = FALSE
+# )
+
+
+first_collection_clean <- first_collection_clean %>%
+  rename(!!!setNames(column_clean_names$old_names,
+                     column_clean_names$new_names))
+
+
+#Now let's get dates into the correct format 
+first_collection_clean $survey_date<- as.Date(first_collection_clean $survey_date)
+first_collection_clean $child_dob <- as.Date(first_collection_clean$child_dob)
+
+#Let's make an age variable, calculated from the date of the survey and the date of birth
+first_collection_clean$child_age_years <- time_length(
+  interval(first_collection_clean$child_dob, first_collection_clean$survey_date),
+  unit = "years"
+) |> floor()
+
+
+#need to decide how to; combine libraries and bookstore access. My inclination is to stick with the highest number.
+
+#also need to decide how to combine parents proficiency speaking plus comprehension. average then round up?
+
+
+```
+```{r}
+
+#1 let's get the census division data for rate of multilingualism
+
+qc_geo_cd <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CD",
+  vectors = "v_CA21_1"   # dummy vector just to retrieve geographies
+) %>%
+clean_names() %>%
+distinct(geo_uid, region_name)
+
+#Got the census division names and geo_uid codes so that we can easily get the info from rate of multilingualsim
+#But the name of regions has wierd characters and I need it to match with the names on the survey. So fixing it.
+	
+qc_geo_cd <- qc_geo_cd  %>%
+
+mutate(
+census_subdivision = str_remove(region_name, "[(].*")
+    ) %>%
+  mutate(census_subdivision = str_remove(census_subdivision , "\\s+$")) %>%
+  select(-region_name)
+
+
+
+#Now let's pull the census division bilingualism rate
+qc_cd_bilingual_rate <- get_census(
+  dataset = "CA21",
+  regions = list(PR="24"),
+  level = "CD",
+  vectors = c(
+    total = "v_CA21_1",
+    bilingual = "v_CA21_436"
+  ) ) %>%
+  clean_names() %>%
+  mutate(multilingual_rate = total/ bilingual) |>
+  select(geo_uid, multilingual_rate)
+
+#let's combine information for both
+
+cd_multilingual_rate<-qc_geo_cd %>%
+  left_join(qc_cd_bilingual_rate, by="geo_uid")
+
+
+#finally, let's merge it with our own data frame
+first_collection_w_predictors<- first_collection_clean %>%
+  left_join(cd_multilingual_rate, by="census_subdivision")
+
+
+```
+```{r wrangling other predictors}
+
+#here we need to make sure we have basically the same columns as in the new data, anmd coded the same way, e.g. numeric scale.
+
+#Sources-> It is difficult to calculate because we did not explictly ask, and saying a child only hjas the parents may be artificial. My inclination is to do this analysis only with the new data.
+
+#postal code-> I assume only with the new data
+
+
+```
+
+
+
+```{r adding density of speaker by language}
+# Look for mother tongue variables
+
+languages_heard<- first_collection_w_predictors %>%
+  dplyr::select(internal_id, census_subdivision, child_english, child_french, child_first_minority, child_second_minority, child_third_minority, geo_uid) %>%
+  pivot_longer(cols=child_english:child_third_minority, names_to="language_type",values_to="language") %>%
+  mutate(language = case_when(
+     language== "Allemand" ~ "German",
+      language== "allemand" ~ "German",
+      language== "Suisse-Allemand"~"German",
+      language== "Espagnol" ~ "Spanish",
+      language== "espagnol" ~ "Spanish",
+      language== "hungarian" ~ "Hungarian",
+      language== "Polonais" ~ "Polish",
+      language== "polonais" ~ "Polish",
+      language== "Spanish and German" ~ "German",
+      language== "francaus et arabe" ~ "Arabic",
+     language==  "Portugais"~ "Portuguese",
+     language==  "Bosnian (Serbian, Croatian)" ~ "Bosnian",
+     language==  "Grec"~ "Greek",
+     language==  "Créole Reunionnais" ~ "Creole",
+      language== "Créole reunionnais"~ "Creole",
+     language==  "Italien"~ "Italian",
+      language== "Lsq" ~ "QSL",
+      language== "LSQ"~ "QSL",
+     language==  "Arménien" ~ "Armenian",
+      language== "Malgache"~ "Malagasy",
+     language==  "Cri"~"Cree",
+                              T~ language
+                              ))
+
+
+
+
+#let's create a list of the languages in the survey
+survey_languages <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  arrange(language)
+
+#retreiving the census 2021 variables
+
+ca21_vectors <- list_census_vectors("CA21")
+
+#now let's find out what the retrieveing vector for mother toungue is in the census data
+
+#This code below helps us get the vectorized codes to pull the languages we want to pull (I went with total)
+mother_tongue_vars <- ca21_vectors %>%
+  filter(
+    str_detect(
+      str_to_lower(label),
+      "mother tongue"
+    )
+  )
+
+#this code below provides the actual individual vectorized codes for each mother tongue
+mother_tongue_children <- child_census_vectors(
+  "v_CA21_1174",
+  leaves_only = TRUE
+)
+
+#A problem is that the first few rows are counting people who speak more than one mother tongue, so I'll identify those rows.
+
+mother_tongue_parents <- ca21_vectors %>%
+  filter(
+    vector %in% unique(mother_tongue_children$parent_vector)
+  ) %>%
+  select(vector, label, parent_vector)
+
+
+multiple_response_vector <- mother_tongue_parents %>%
+  filter(label == "Multiple responses") %>%
+  pull(vector)
+
+multiple_response_children <- child_census_vectors(
+  multiple_response_vector,
+  leaves_only = TRUE
+)
+#This is going to keep census data only for single language responses, since the multiple language responses are like French+non-official language, so I have no way of adjudicating the count to a specific language.
+single_language_vectors <- mother_tongue_children %>%
+  filter(!vector %in% multiple_response_children$vector)
+
+
+#Ok now I can create a look up variable to look up for the census languages that are in my survey
+
+language_lookup <- single_language_vectors %>%
+  select(
+    vector,
+    census_language = label
+  )
+
+#to avoid breaking the r memory by querying too many languages at once, I will break up the query into batches
+
+language_vectors <- language_lookup$vector
+
+# Break vector IDs into batches of 50
+vector_batches <- split(
+  language_vectors,
+  ceiling(seq_along(language_vectors) / 50)
+)
+
+language_batches <- lapply(
+  vector_batches,
+  function(x) {
+    get_census(
+      dataset = "CA21",
+      regions = list(PR = "24"),
+      level = "CD",
+      vectors = x,
+       labels = "short"
+    )
+  }
+)
+
+qc_cd_languages_wide <- language_batches[[1]]
+
+if (length(language_batches) > 1) {
+  
+  for (i in 2:length(language_batches)) {
+    
+    new_vectors <- intersect(
+      language_vectors,
+      names(language_batches[[i]])
+    )
+    
+    qc_cd_languages_wide <- qc_cd_languages_wide %>%
+      left_join(
+        language_batches[[i]] %>%
+          select(GeoUID, all_of(new_vectors)),
+        by = "GeoUID"
+      )
+  }
+}
+
+
+qc_cd_languages_wide <- language_batches[[1]]
+
+for (i in 2:length(language_batches)) {
+
+  new_cols <- setdiff(
+    names(language_batches[[i]]),
+    names(qc_cd_languages_wide)
+  )
+
+  qc_cd_languages_wide <- qc_cd_languages_wide %>%
+    left_join(
+      language_batches[[i]] %>%
+        select(GeoUID, all_of(new_cols)),
+      by = "GeoUID"
+    )
+}
+
+#making the dataframe long instead of wide
+
+census_language_cd <- qc_cd_languages_wide %>%
+  pivot_longer(
+    cols = starts_with("v_CA21_"),
+    names_to = "vector",
+    values_to = "mother_tongue_n"
+  )
+
+
+#joining this dataframe with the language look up
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    language_lookup,
+    by = "vector"
+  )
+
+#Now I have all the regions, language names, and speaker n. I will add the population denominator to be able to calculate a speaker rate or density
+
+cd_population_mt <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CD",
+  vectors = "v_CA21_1174",
+  labels = "short"
+)
+
+
+cd_population_mt <- cd_population_mt %>%
+  select(
+    GeoUID,
+    mother_tongue_population = v_CA21_1174
+  )
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    cd_population_mt,
+    by = "GeoUID"
+  ) %>%
+  mutate(
+    mother_tongue_rate = mother_tongue_n / mother_tongue_population,
+    mother_tongue_percent = mother_tongue_rate * 100
+  )
+
+#Checking if the labels in my survey data match the cancensus language labels.
+language_crosswalk <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  rename(survey_language = language) %>%
+  mutate(
+    census_language = case_when(
+      survey_language == "Berber" ~ "Berber languages, n.i.e.",
+      TRUE ~ survey_language
+    ),
+    
+    exact_match = census_language %in% language_lookup$census_language
+  )
+
+
+#Add the survey labels to the lookup table
+
+# census_lookup_final <- language_crosswalk %>%
+#   select(
+#     survey_language,
+#     census_language
+#   ) %>%
+#   left_join(
+#     census_language_cd,
+#     by = "census_language"
+#   )
+# 
+# 
+# data_clean_long<- languages_heard %>%
+#     left_join(
+#     census_lookup_final %>%
+#       select(
+#         survey_language,
+#         GeoUID,
+#         mother_tongue_n,
+#         mother_tongue_population,
+#         mother_tongue_rate,
+#         mother_tongue_percent
+#       ),
+#     by = c(
+#       "language" = "survey_language",
+#       "geo_uid" = "GeoUID"
+#     )
+#   )
+
+```
