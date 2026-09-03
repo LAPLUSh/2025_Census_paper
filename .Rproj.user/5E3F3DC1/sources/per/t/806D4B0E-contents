@@ -1,13 +1,14 @@
 ---
-title: "First_collection_clean"
+title: "2025_census_analyses"
 author: "ASM"
-date: "2026-09-01"
+date: "2026-03-10"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
 
 ```{r loading packages and data}
 library(dplyr)
@@ -21,61 +22,49 @@ library(here)
 library(readxl)
 library(stringr)
 
-first_collection<- read_excel("Anonymized_Data/full_first_collection.xlsx")
-column_clean_names<- read.csv("first_collection_cols_clean.csv")
+partial_data<- read_excel("Anonymized_Data/census_pilot_data.xlsx")
+column_clean_names<- read.csv("column_clean_names.csv")
 ```
-```{r data clean}
 
-first_collection_clean<-clean_names(first_collection)
+```{r cleaning parent report data}
+partial_data<-clean_names(partial_data)
 
-#Keeping only the people who submitted the questionnaire, and manageing exclusions
-#need to find and exclude the tests
-#Need to decide on some of the people who answered yes on the delay question, like "my child uses glasses" I would keep
-first_collection_clean<- first_collection_clean %>%
+
+
+#First let's get rid of the screened out people
+
+data_clean<- partial_data %>%
   dplyr::filter(status=="Submitted") %>%
-  dplyr::filter(does_your_child_have_any_hearing_or_vision_problems_or_developmental_delays== "No")
-
+  dplyr::filter(by_clicking_on_the_i_agree_button_i_certify_that_i_have_read_the_information_and_consent_form_i_voluntarily_and_freely_consent_to_participate_in_this_research_project== "I agree") %>%
+  dplyr::filter(has_your_child_been_diagnosed_with_a_speech_disorder_or_a_language_delay== "No")
 
 #Now let's select only the columns of data that we need
 
-columns_drop<- c(2,3,4,5,7,10,11,12,15,17,20,25,26,27,28,36,37,38,39,40, 41,42,43,50,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,97,98,100,104,105,106,107,115,116,118,122,123,130,132,133,135,139,140,147,149,150,152,156,157,164,167,166,169,173,174,186,188,190,191,197,199,200,201)
+columns_drop<- c(2,3,4,5,7,8,9,10,11,12,13,14,15,18,19,31,21,22,25,28,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,92,103,114,120,128,136,140,141,143,144,146,150,151,153,154,156,160,161,163,164,166,170,171,173,174,176,180,181,183,184,185)
 
-
-
-first_collection_clean<- first_collection_clean%>%
+data_clean<- data_clean %>%
   dplyr::select(-all_of(columns_drop))
 
+#Now let's clean the column names from the very long ones to ones easy to call in the environment by using the csv file I created containing the survey expost names cleaned from R and shorter manageable names I would like for them to be called
 
-# write.csv(
-#   first_collection_clean,
-#   here("Anonymized_Data/first_collection_clean.csv"),
-#   row.names = FALSE
-# )
-
-
-first_collection_clean <- first_collection_clean %>%
+data_clean <- data_clean %>%
   rename(!!!setNames(column_clean_names$old_names,
                      column_clean_names$new_names))
 
 
 #Now let's get dates into the correct format 
-first_collection_clean $survey_date<- as.Date(first_collection_clean $survey_date)
-first_collection_clean $child_dob <- as.Date(first_collection_clean$child_dob)
+data_clean$survey_date<- as.Date(data_clean$survey_date)
+data_clean$child_dob <- as.Date(data_clean$child_dob)
 
 #Let's make an age variable, calculated from the date of the survey and the date of birth
-first_collection_clean$child_age_years <- time_length(
-  interval(first_collection_clean$child_dob, first_collection_clean$survey_date),
+data_clean$child_age_years <- time_length(
+  interval(data_clean$child_dob, data_clean$survey_date),
   unit = "years"
 ) |> floor()
 
-
-#need to decide how to; combine libraries and bookstore access. My inclination is to stick with the highest number.
-
-#also need to decide how to combine parents proficiency speaking plus comprehension. average then round up?
-
-
 ```
-```{r}
+
+```{r making census bilingualism rate variable}
 
 #1 let's get the census division data for rate of multilingualism
 
@@ -100,6 +89,7 @@ census_subdivision = str_remove(region_name, "[(].*")
   select(-region_name)
 
 
+#2 we need ti use total knowledge of languages and then sum english and french, english, french and non-official, french and non official, E nglish, french and non official, and multiple non official.
 
 #Now let's pull the census division bilingualism rate
 qc_cd_bilingual_rate <- get_census(
@@ -111,7 +101,7 @@ qc_cd_bilingual_rate <- get_census(
     bilingual = "v_CA21_436"
   ) ) %>%
   clean_names() %>%
-  mutate(multilingual_rate = total/ bilingual) |>
+  mutate(multilingual_rate = bilingual/total) |>
   select(geo_uid, multilingual_rate)
 
 #let's combine information for both
@@ -121,57 +111,65 @@ cd_multilingual_rate<-qc_geo_cd %>%
 
 
 #finally, let's merge it with our own data frame
-first_collection_w_predictors<- first_collection_clean %>%
+clean_w_predictors<- data_clean %>%
   left_join(cd_multilingual_rate, by="census_subdivision")
 
+```
+```{r adding number of sources predictor}
+
+english_sources<- data_clean %>%
+  select(internal_id, caregiver_1_english, caregiver_2_english, older_siblings_english, younger_siblings_english, other_family_english, child_friends_english, teachers_english) %>%
+  mutate(english_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, english_sources_n)
+
+french_sources<- data_clean %>%
+  select(internal_id, caregiver_1_french, caregiver_2_french, older_siblings_french, younger_siblings_french, other_family_french, child_friends_french, teachers_french) %>%
+  mutate(french_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, french_sources_n)
+
+first_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_first_minority, caregiver_2_first_minority, older_siblings_first_minority, younger_siblings_first_minority, other_family_first_minority, child_friends_first_minority, teachers_first_minority) %>%
+  mutate(first_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, first_min_sources_n)
+
+
+second_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_second_minority, caregiver_2_second_minority, older_siblings_second_minority, younger_siblings_second_minority, other_family_second_minority, child_friends_second_minority, teachers_second_minority) %>%
+  mutate(second_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, second_min_sources_n)
+
+third_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_third_minority, caregiver_2_third_minority, older_siblings_third_minority, younger_siblings_third_minority, other_family_third_minority, child_friends_third_minority, teachers_third_minority) %>%
+  mutate(third_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, third_min_sources_n)
+
+
+all_language_sources<- english_sources %>%
+  left_join(french_sources) %>%
+  left_join(first_min_sources) %>%
+  left_join(second_min_sources) %>%
+  left_join(third_min_sources)
+
+
+#Now let's join the sum of sources from each language into our dataset with predictors
+
+clean_w_predictors <- clean_w_predictors %>%
+  left_join(all_language_sources, by="internal_id")
 
 ```
-```{r wrangling other predictors}
-
-#here we need to make sure we have basically the same columns as in the new data, anmd coded the same way, e.g. numeric scale.
-
-#Sources-> It is difficult to calculate because we did not explictly ask, and saying a child only hjas the parents may be artificial. My inclination is to do this analysis only with the new data.
-
-#postal code-> I assume only with the new data
-
-
-```
-
-
 
 ```{r adding density of speaker by language}
 # Look for mother tongue variables
 
-languages_heard<- first_collection_w_predictors %>%
+languages_heard<- clean_w_predictors %>%
   dplyr::select(internal_id, census_subdivision, child_english, child_french, child_first_minority, child_second_minority, child_third_minority, geo_uid) %>%
   pivot_longer(cols=child_english:child_third_minority, names_to="language_type",values_to="language") %>%
-  mutate(language = case_when(
-     language== "Allemand" ~ "German",
-      language== "allemand" ~ "German",
-      language== "Suisse-Allemand"~"German",
-      language== "Espagnol" ~ "Spanish",
-      language== "espagnol" ~ "Spanish",
-      language== "hungarian" ~ "Hungarian",
-      language== "Polonais" ~ "Polish",
-      language== "polonais" ~ "Polish",
-      language== "Spanish and German" ~ "German",
-      language== "francaus et arabe" ~ "Arabic",
-     language==  "Portugais"~ "Portuguese",
-     language==  "Bosnian (Serbian, Croatian)" ~ "Bosnian",
-     language==  "Grec"~ "Greek",
-     language==  "Créole Reunionnais" ~ "Creole",
-      language== "Créole reunionnais"~ "Creole",
-     language==  "Italien"~ "Italian",
-      language== "Lsq" ~ "QSL",
-      language== "LSQ"~ "QSL",
-     language==  "Arménien" ~ "Armenian",
-      language== "Malgache"~ "Malagasy",
-     language==  "Cri"~"Cree",
+  mutate(language = case_when(language == "Anglais"~"English",
+                              language == "Francais"~"French",
+                              language == "Berbère"~"Berber",
+                              language== "Portugais"~"Portuguese",
                               T~ language
                               ))
-
-
-
 
 #let's create a list of the languages in the survey
 survey_languages <- languages_heard %>%
@@ -353,32 +351,96 @@ language_crosswalk <- languages_heard %>%
 
 #Add the survey labels to the lookup table
 
-# census_lookup_final <- language_crosswalk %>%
-#   select(
-#     survey_language,
-#     census_language
-#   ) %>%
-#   left_join(
-#     census_language_cd,
-#     by = "census_language"
-#   )
-# 
-# 
-# data_clean_long<- languages_heard %>%
-#     left_join(
-#     census_lookup_final %>%
-#       select(
-#         survey_language,
-#         GeoUID,
-#         mother_tongue_n,
-#         mother_tongue_population,
-#         mother_tongue_rate,
-#         mother_tongue_percent
-#       ),
-#     by = c(
-#       "language" = "survey_language",
-#       "geo_uid" = "GeoUID"
-#     )
-#   )
+census_lookup_final <- language_crosswalk %>%
+  select(
+    survey_language,
+    census_language
+  ) %>%
+  left_join(
+    census_language_cd,
+    by = "census_language"
+  )
+
+
+data_clean_long<- languages_heard %>%
+    left_join(
+    census_lookup_final %>%
+      select(
+        survey_language,
+        GeoUID,
+        mother_tongue_n,
+        mother_tongue_population,
+        mother_tongue_rate,
+        mother_tongue_percent
+      ),
+    by = c(
+      "language" = "survey_language",
+      "geo_uid" = "GeoUID"
+    )
+  )
 
 ```
+
+
+```{r recode active language use categories to numbers}
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_active_use_category,
+        child_french_active_use_category,
+        child_first_min_active_use_category,
+        child_second_min_active_use_category,
+        child_third_min_active_use_category
+      ),
+      ~ recode(
+        .x,
+        "My child does not understand or speak this language" = 0,
+        "My child understands this language, but rarely speaks in it" = 1,
+        "My child speaks this language mainly when someone addresses them in that language" = 2,
+        "My child speaks this language spontaneously" = 3
+      )
+    )
+  )
+
+```
+
+
+
+```{r statistical analyses language agnostic}
+
+#pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
+#For the matrix at least run each concern and attitude separate.
+
+
+#Base model
+#active_use~child_age+multiliningualism_rate
+#active use will be averaged across languages for the following variable: interlocutor matching + exploratory analyses with the categorical variable
+#run the aoa as a factor in an exploratory fashion
+
+#attitudes model 
+#active_use~child_age+multiliningualism_rate+attitudes+concerns
+
+#Anova between base and attidues models.
+
+
+#Viz: active use y axis, multilingualism rate. confidence interval. Run it smooth too to check if it's linear, with the data points also.
+#histograms, and diagnostic plots.
+
+
+```
+
+
+```{r statistical analyses language specific}
+
+#Matrix with English active use (both), French, Minority. Age, exposure per language, density of speaker per language, and multilingualism rate, attitudes, and concerns (one row each).
+
+#active use by language ~ age + language exposure + speaker rate (one set of models)
+
+#active use by language ~ age + language exposure + speaker rate + multilingualism rate (exploratory to see if adding the multilingualism rate soaks up more variance)
+
+
+
+```
+

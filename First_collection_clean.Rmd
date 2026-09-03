@@ -30,7 +30,7 @@ first_collection_clean<-clean_names(first_collection)
 
 #Keeping only the people who submitted the questionnaire, and manageing exclusions
 #need to find and exclude the tests
-#Need to decide on some of the people who answered yes on the delay question, like "my child uses glasses" I would keep
+
 first_collection_clean<- first_collection_clean %>%
   dplyr::filter(status=="Submitted") %>%
   dplyr::filter(does_your_child_have_any_hearing_or_vision_problems_or_developmental_delays== "No")
@@ -69,9 +69,10 @@ first_collection_clean$child_age_years <- time_length(
 ) |> floor()
 
 
-#need to decide how to; combine libraries and bookstore access. My inclination is to stick with the highest number.
+#combine libraries and bookstore access. stick with the highest number.
 
 #also need to decide how to combine parents proficiency speaking plus comprehension. average then round up?
+#DECIDED Mathematically convert down the 7 point scale to 6 to match. Just use speaking
 
 
 ```
@@ -128,11 +129,11 @@ first_collection_w_predictors<- first_collection_clean %>%
 ```
 ```{r wrangling other predictors}
 
-#here we need to make sure we have basically the same columns as in the new data, anmd coded the same way, e.g. numeric scale.
+#here we need to make sure we have basically the same columns as in the new data, and coded the same way, e.g. numeric scale.
 
-#Sources-> It is difficult to calculate because we did not explictly ask, and saying a child only hjas the parents may be artificial. My inclination is to do this analysis only with the new data.
+#Sources-> It is difficult to calculate because we did not explictly ask, and saying a child only hjas the parents may be artificial. My inclination is to do this analysis only with the new data.---- add a more coarse variable here and the new data about the number of caregivers that speak that language to the child.
 
-#postal code-> I assume only with the new data
+#postal code-> I assume only with the new data. YES decided. 
 
 
 ```

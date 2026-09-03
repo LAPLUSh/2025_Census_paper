@@ -89,6 +89,7 @@ census_subdivision = str_remove(region_name, "[(].*")
   select(-region_name)
 
 
+#2 we need ti use total knowledge of languages and then sum english and french, english, french and non-official, french and non official, E nglish, french and non official, and multiple non official.
 
 #Now let's pull the census division bilingualism rate
 qc_cd_bilingual_rate <- get_census(
@@ -100,7 +101,7 @@ qc_cd_bilingual_rate <- get_census(
     bilingual = "v_CA21_436"
   ) ) %>%
   clean_names() %>%
-  mutate(multilingual_rate = total/ bilingual) |>
+  mutate(multilingual_rate = bilingual/total) |>
   select(geo_uid, multilingual_rate)
 
 #let's combine information for both
@@ -409,6 +410,35 @@ clean_w_predictors <- clean_w_predictors %>%
 
 ```{r statistical analyses language agnostic}
 
+#pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
+#For the matrix at least run each concern and attitude separate.
+
+
+#Base model
+#active_use~child_age+multiliningualism_rate
+#active use will be averaged across languages for the following variable: interlocutor matching + exploratory analyses with the categorical variable
+#run the aoa as a factor in an exploratory fashion
+
+#attitudes model 
+#active_use~child_age+multiliningualism_rate+attitudes+concerns
+
+#Anova between base and attidues models.
+
+
+#Viz: active use y axis, multilingualism rate. confidence interval. Run it smooth too to check if it's linear, with the data points also.
+#histograms, and diagnostic plots.
+
+
+```
+
+
+```{r statistical analyses language specific}
+
+#Matrix with English active use (both), French, Minority. Age, exposure per language, density of speaker per language, and multilingualism rate, attitudes, and concerns (one row each).
+
+#active use by language ~ age + language exposure + speaker rate (one set of models)
+
+#active use by language ~ age + language exposure + speaker rate + multilingualism rate (exploratory to see if adding the multilingualism rate soaks up more variance)
 
 
 
