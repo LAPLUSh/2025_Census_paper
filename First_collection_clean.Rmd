@@ -29,11 +29,11 @@ column_clean_names<- read.csv("first_collection_cols_clean.csv")
 first_collection_clean<-clean_names(first_collection)
 
 #Keeping only the people who submitted the questionnaire, and manageing exclusions
-#need to find and exclude the tests
+
 
 first_collection_clean<- first_collection_clean %>%
   dplyr::filter(status=="Submitted") %>%
-  dplyr::filter(does_your_child_have_any_hearing_or_vision_problems_or_developmental_delays== "No")
+  dplyr::filter(exclude=="F") #Caolumn made to manage the developmental delay exclusions critically based on parents descriptions, also added the tests to be excluded
 
 
 #Now let's select only the columns of data that we need
@@ -69,14 +69,14 @@ first_collection_clean$child_age_years <- time_length(
 ) |> floor()
 
 
-#combine libraries and bookstore access. stick with the highest number.
 
-#also need to decide how to combine parents proficiency speaking plus comprehension. average then round up?
-#DECIDED Mathematically convert down the 7 point scale to 6 to match. Just use speaking
+
+
+
 
 
 ```
-```{r}
+```{r ading the bilingualism rate variable from cancensus}
 
 #1 let's get the census division data for rate of multilingualism
 
@@ -131,9 +131,155 @@ first_collection_w_predictors<- first_collection_clean %>%
 
 #here we need to make sure we have basically the same columns as in the new data, and coded the same way, e.g. numeric scale.
 
-#Sources-> It is difficult to calculate because we did not explictly ask, and saying a child only hjas the parents may be artificial. My inclination is to do this analysis only with the new data.---- add a more coarse variable here and the new data about the number of caregivers that speak that language to the child.
 
-#postal code-> I assume only with the new data. YES decided. 
+#language sources
+
+first_collection_w_predictors <- first_collection_clean %>%
+  mutate(
+    caregiver_sources_english =
+      (c1_percent_english_to_child >= 25 & !is.na(c1_percent_english_to_child)) + #counting as 1 values where parents speak the language to the child more than 25% of the time and values other than NA
+      (c2_percent_english_to_child >= 25 & !is.na(c2_percent_english_to_child)),
+
+    caregiver_sources_french =
+      (c1_percent_french_to_child >= 25 & !is.na(c1_percent_french_to_child)) +
+      (c2_percent_french_to_child >= 25 & !is.na(c2_percent_french_to_child)),
+
+    caregiver_sources_first_minority =
+      (c1_percent_first_minority_to_child >= 25 & !is.na(c1_percent_first_minority_to_child)) +
+      (c2_percent_first_minority_to_child >= 25 & !is.na(c2_percent_first_minority_to_child)),
+
+    caregiver_sources_second_minority =
+      (c1_percent_second_minority_to_child >= 25 & !is.na(c1_percent_second_minority_to_child)) +
+      (c2_percent_second_minority_to_child >= 25 & !is.na(c2_percent_second_minority_to_child)),
+
+    caregiver_sources_third_minority =
+      (c1_percent_third_minority_to_child >= 25 & !is.na(c1_percent_third_minority_to_child)) +
+      (c2_percent_third_minority_to_child >= 25 & !is.na(c2_percent_third_minority_to_child))
+  )
+
+#pass the book access onto a numeric categorie and using a math formula (new score=2(old score)−1) to convert the categories onto a 7-point scale to match the sacle we use in the newer data collection
+
+first_collection_w_predictors <- first_collection_w_predictors %>%
+  mutate(
+    across(
+      c(
+        book_resources_english_bookstore,
+        book_resources_english_library,
+        book_resources_french_bookstore,
+        book_resources_french_library,
+        book_resources_first_minority_bookstore,
+        book_resources_first_minority_library,
+        book_resources_second_minority_bookstore,
+        book_resources_second_minority_library,
+        book_resources_third_minority_bookstore,
+        book_resources_third_minority_library
+      ),
+      ~ case_when(
+        .x == "Very difficult" ~ 1,
+        .x == "Somewhat difficult" ~ 3,
+        .x == "Somewhat easy" ~ 5,
+        .x == "Very easy" ~ 7,
+        .x == "I'm not sure" ~ NA_real_,
+        TRUE ~ NA_real_
+      ),
+      .names = "{.col}_7pt" #preserving th old columns ands adding new 7-point scale columns for reproducibility
+    )
+  )
+
+
+
+#combine libraries and bookstore access. stick with the highest number.#naming the column the same as in the newer data for ease
+
+first_collection_w_predictors <- first_collection_w_predictors %>%
+  mutate(
+    book_resources_english = if_else(
+      is.na(book_resources_english_bookstore_7pt) &
+        is.na(book_resources_english_library_7pt),
+      NA_real_,
+      pmax(
+        book_resources_english_bookstore_7pt,
+        book_resources_english_library_7pt,
+        na.rm = TRUE
+      )
+    ),
+
+    book_resources_french = if_else(
+      is.na(book_resources_french_bookstore_7pt) &
+        is.na(book_resources_french_library_7pt),
+      NA_real_,
+      pmax(
+        book_resources_french_bookstore_7pt,
+        book_resources_french_library_7pt,
+        na.rm = TRUE
+      )
+    ),
+
+    book_resources_first_minority = if_else(
+      is.na(book_resources_first_minority_bookstore_7pt) &
+        is.na(book_resources_first_minority_library_7pt),
+      NA_real_,
+      pmax(
+        book_resources_first_minority_bookstore_7pt,
+        book_resources_first_minority_library_7pt,
+        na.rm = TRUE
+      )
+    ),
+
+    book_resources_second_minority = if_else(
+      is.na(book_resources_second_minority_bookstore_7pt) &
+        is.na(book_resources_second_minority_library_7pt),
+      NA_real_,
+      pmax(
+        book_resources_second_minority_bookstore_7pt,
+        book_resources_second_minority_library_7pt,
+        na.rm = TRUE
+      )
+    ),
+
+    book_resources_third_minority = if_else(
+      is.na(book_resources_third_minority_bookstore_7pt) &
+        is.na(book_resources_third_minority_library_7pt),
+      NA_real_,
+      pmax(
+        book_resources_third_minority_bookstore_7pt,
+        book_resources_third_minority_library_7pt,
+        na.rm = TRUE
+      )
+    )
+  )
+
+
+#DECIDED Mathematically convert down the 7 point scale to 6 to match. Just use speaking\
+#In this case the mathematical conversion is new=(old−1)×5/6
+
+
+first_collection_w_predictors <- first_collection_w_predictors %>%
+  mutate(
+    across(
+      c(
+        caregiver_1_english_proficiency,
+        caregiver_2_english_proficiency,
+        caregiver_1_french_proficiency,
+        caregiver_2_french_proficiency,
+        caregiver_1_first_min_proficiency,
+        caregiver_2_first_min_proficiency,
+        caregiver_1_second_min_proficiency,
+        caregiver_2_second_min_proficiency,
+        caregiver_1_third_min_proficiency,
+        caregiver_2_third_min_proficiency
+      ),
+      ~ (.x - 1) * (5 / 6),
+      .names = "{.col}_6pt" # preserve original 7-point columns
+    )
+  )
+#the problem with this formula is that we get decimal numbers, perhaps for the best to leave them decimal but could also convert to integers by rounding up or down
+
+
+
+
+
+
+
 
 
 ```
