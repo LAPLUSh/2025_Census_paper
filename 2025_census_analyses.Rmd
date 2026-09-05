@@ -21,9 +21,12 @@ options(cancensus.api_key = "CensusMapper_9cd8925d1dd9197227f4bfaf596e0797")
 library(here)
 library(readxl)
 library(stringr)
+library(cansim)
 
 partial_data<- read_excel("Anonymized_Data/census_pilot_data.xlsx")
 column_clean_names<- read.csv("column_clean_names.csv")
+old_data<-read.csv("Anonymized_Data/first_collection_w_predictors.csv")
+
 ```
 
 ```{r cleaning parent report data}
@@ -64,57 +67,7 @@ data_clean$child_age_years <- time_length(
 
 ```
 
-```{r making census bilingualism rate variable}
 
-#1 let's get the census division data for rate of multilingualism
-
-qc_geo_cd <- get_census(
-  dataset = "CA21",
-  regions = list(PR = "24"),
-  level = "CD",
-  vectors = "v_CA21_1"   # dummy vector just to retrieve geographies
-) %>%
-clean_names() %>%
-distinct(geo_uid, region_name)
-
-#Got the census division names and geo_uid codes so that we can easily get the info from rate of multilingualsim
-#But the name of regions has wierd characters and I need it to match with the names on the survey. So fixing it.
-	
-qc_geo_cd <- qc_geo_cd  %>%
-
-mutate(
-census_subdivision = str_remove(region_name, "[(].*")
-    ) %>%
-  mutate(census_subdivision = str_remove(census_subdivision , "\\s+$")) %>%
-  select(-region_name)
-
-
-#2 we need ti use total knowledge of languages and then sum english and french, english, french and non-official, french and non official, E nglish, french and non official, and multiple non official.
-
-#Now let's pull the census division bilingualism rate
-qc_cd_bilingual_rate <- get_census(
-  dataset = "CA21",
-  regions = list(PR="24"),
-  level = "CD",
-  vectors = c(
-    total = "v_CA21_1",
-    bilingual = "v_CA21_436"
-  ) ) %>%
-  clean_names() %>%
-  mutate(multilingual_rate = bilingual/total) |>
-  select(geo_uid, multilingual_rate)
-
-#let's combine information for both
-
-cd_multilingual_rate<-qc_geo_cd %>%
-  left_join(qc_cd_bilingual_rate, by="geo_uid")
-
-
-#finally, let's merge it with our own data frame
-clean_w_predictors<- data_clean %>%
-  left_join(cd_multilingual_rate, by="census_subdivision")
-
-```
 ```{r adding number of sources predictor}
 
 english_sources<- data_clean %>%
@@ -153,10 +106,325 @@ all_language_sources<- english_sources %>%
 
 #Now let's join the sum of sources from each language into our dataset with predictors
 
-clean_w_predictors <- clean_w_predictors %>%
+clean_w_predictors <- data_clean %>%
   left_join(all_language_sources, by="internal_id")
 
+
+#Also making a coarser caregiver sources predictor to match what we have in the first collection data
+
+clean_w_predictors<- clean_w_predictors %>%
+  mutate(
+    caregiver_sources_english =
+      (caregiver_1_english = !is.na(caregiver_1_english)) + 
+      (caregiver_2_english =  !is.na(caregiver_2_english)),
+
+    caregiver_sources_french =
+      (caregiver_1_french = !is.na(caregiver_1_french)) +
+      (caregiver_2_french = !is.na(caregiver_2_french)),
+
+    caregiver_sources_first_minority =
+      (caregiver_1_first_minority = !is.na(caregiver_1_first_minority)) +
+      (caregiver_2_first_minority = !is.na(caregiver_2_first_minority)),
+
+    caregiver_sources_second_minority =
+      (caregiver_1_second_minority = !is.na(caregiver_1_second_minority)) +
+      (caregiver_2_second_minority = !is.na(caregiver_2_second_minority)),
+
+    caregiver_sources_third_minority =
+      (caregiver_1_third_minority = !is.na(caregiver_1_third_minority)) +
+      (caregiver_2_third_minority = !is.na(caregiver_2_third_minority))
+  )
+
+
 ```
+
+
+```{r recode categories to numbers}
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_active_use_category,
+        child_french_active_use_category,
+        child_first_min_active_use_category,
+        child_second_min_active_use_category,
+        child_third_min_active_use_category
+      ),
+      ~ recode(
+        .x,
+        "My child does not understand or speak this language" = 0,
+        "My child understands this language, but rarely speaks in it" = 1,
+        "My child speaks this language mainly when someone addresses them in that language" = 2,
+        "My child speaks this language spontaneously" = 3
+      )
+    )
+  )
+
+
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        caregiver_1_english_proficiency,
+        caregiver_1_french_proficiency,
+        caregiver_1_first_min_proficiency,
+        caregiver_1_second_min_proficiency,
+        caregiver_1_third_min_proficiency,
+        caregiver_2_english_proficiency,
+        caregiver_2_french_proficiency,
+        caregiver_2_first_min_proficiency,
+        caregiver_2_second_min_proficiency,
+        caregiver_2_third_min_proficiency,
+      ),
+      ~ case_when(
+        .x == "They do not speak this language" ~ 0,
+        .x == "Very poor" ~ 1,
+        .x == "Poor" ~ 2,
+        .x == "Acceptable" ~ 3,
+        .x == "Good" ~ 4,
+        .x == "Excellent" ~ 5,
+        TRUE ~ NA_real_
+      ),
+      .names = "{.col}" 
+    )
+  )
+
+
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_mixing,
+        child_french_mixing,
+        child_first_min_mixing,
+        child_second_min_mixing,
+        child_third_min_mixing
+      ),
+      ~ case_when(
+        str_detect(.x, "^My child never uses other languages") ~ 1,
+        str_detect(.x, "^My child mixes in a few words") ~ 2,
+        str_detect(.x, "^My child speaks mainly in another language") ~ 3,
+        str_detect(.x, "^My child never speaks") ~ NA_real_,
+        TRUE ~ NA_real_
+      ),
+      .names = "{.col}"
+    )
+  )
+```
+
+```{r merging new data with first collection}
+ #Now that the predictors are wrangled let's select only the columns we need for the analyses
+
+clean_w_predictors <- clean_w_predictors %>%
+  select(-c( "survey_date", "child_dob","caregiver_1_english","caregiver_2_english","younger_siblings_english","older_siblings_english","other_family_english","child_friends_english","teachers_english","caregiver_1_french","caregiver_2_french","younger_siblings_french","older_siblings_french",            "other_family_french","child_friends_french","teachers_french","caregiver_1_first_minority","caregiver_2_first_minority",          "younger_siblings_first_minority", "older_siblings_first_minority","other_family_first_minority","child_friends_first_minority",           "teachers_first_minority","caregiver_1_second_minority","caregiver_2_second_minority","younger_siblings_second_minority",      "older_siblings_second_minority","other_family_second_minority","child_friends_second_minority","teachers_second_minority",              "caregiver_1_third_minority","caregiver_2_third_minority","younger_siblings_third_minority","older_siblings_third_minority",        "other_family_third_minority","child_friends_third_minority","teachers_third_minority","other_sources", "multilingual_childrearing_reason",       "multilingual_chilrearing_concerns" ))
+
+
+#fixing some inconsistencies so that the datasets can merge
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(minority_lang_count = as.integer(as.character(minority_lang_count)))
+
+clean_w_predictors<- clean_w_predictors %>%
+  full_join(old_data)
+
+
+
+```
+
+```{r making census bilingualism rate variable}
+
+# ============================================================
+# Create a Census Division-level multilingualism rate predictor
+# ============================================================
+#
+# Goal:
+# Estimate the proportion of people in each Quebec Census Division
+# who report knowledge of multiple languages, using Statistics Canada
+# 2021 Census data.
+#
+# The final variable, multilingual_rate, is:
+#
+#   multiple-language responses / total knowledge-of-language responses
+#
+# We then merge this regional rate into the survey dataset based on
+# each participant's Census Division.
+
+
+# 1. Retrieve Quebec Census Division names and geographic IDs
+# -----------------------------------------------------------
+#
+# We first use cancensus to obtain the list of Quebec Census Divisions.
+# We do not need a substantive Census variable at this stage, so
+# v_CA21_1 is used only as a dummy vector to make the geography query.
+#
+# geo_uid is especially useful because it provides a stable geographic
+# identifier that can later be matched to the GeoUID in the StatCan table.
+
+qc_geo_cd <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),   # Quebec province code
+  level = "CD",                # Census Division level
+  vectors = "v_CA21_1"         # dummy vector; used only to retrieve geography
+) %>%
+  clean_names() %>%
+  distinct(geo_uid, region_name)
+
+
+# Clean the Census Division names so that they match the region names
+# already used in the survey dataset.
+#
+# Some cancensus region names contain additional information in
+# parentheses. We remove everything from the first opening parenthesis
+# onward, then remove any trailing whitespace.
+
+qc_geo_cd <- qc_geo_cd %>%
+  mutate(
+    census_subdivision = str_remove(region_name, "[(].*"),
+    census_subdivision = str_remove(census_subdivision, "\\s+$")
+  ) %>%
+  select(-region_name)
+
+
+# 2. Connect to Statistics Canada Table 98-10-0216-01
+# ---------------------------------------------------
+#
+# Table 98-10-0216-01 contains 2021 Census information on knowledge
+# of languages, including separate columns for:
+#
+#   - total responses to knowledge of languages
+#   - single-language responses
+#   - multiple-language responses
+#
+# get_cansim_connection() is used instead of get_cansim() because
+# this is a very large table. The connection allows us to filter the
+# data before loading it fully into R memory.
+
+#WARNING This line takes about 15 minutes to run unless you add a local cache space in your computer
+knowledge_con <- get_cansim_connection(
+  "98-10-0216-01"
+)
+
+
+# 3. Extract the relevant Quebec Census Division rows
+# ---------------------------------------------------
+#
+# First, rename the very long StatCan column names to shorter,
+# easier-to-read variable names.
+#
+# Then restrict the dataset to:
+#
+#   - all ages combined
+#   - all genders combined
+#   - Census estimates expressed as counts
+#   - the overall "Total - Knowledge of languages" category
+#   - Quebec Census Divisions only
+#
+# Quebec Census Division DGUIDs begin with "2021A000324":
+#   2021 = Census year
+#   24   = Quebec province code
+#   CD   = Census Division geography
+#
+# Filtering is done while the data are still stored as an Arrow query,
+# which avoids loading the full Statistics Canada table into memory.
+
+qc_cd_multilingual_rate <- knowledge_con %>%
+  rename(
+    age = `Age (7)`,
+    gender = `Gender (3)`,
+    statistics = `Statistics (3)`,
+    knowledge_of_languages = `Knowledge of languages (324)`,
+    total_language_responses =
+      `Single and multiple responses of knowledge of languages (3):Total - Single and multiple responses of knowledge of languages[1]`,
+    multiple_language_responses =
+      `Single and multiple responses of knowledge of languages (3):Multiple responses of knowledge of languages[3]`
+  ) %>%
+
+  filter(
+    age == "Total - Age",
+    gender == "Total - Gender",
+    statistics == "Count",
+    knowledge_of_languages == "Total - Knowledge of languages",
+
+    # Keep Quebec Census Divisions only
+    str_starts(DGUID, "2021A000324")
+  ) %>%
+
+  select(
+    GEO,
+    DGUID,
+    GeoUID,
+    total_language_responses,
+    multiple_language_responses
+  ) %>%
+
+  # Only after filtering to the small subset we need do we load
+  # the data into R as a regular tibble.
+  collect()
+
+
+# 4. Calculate the regional multilingualism rate
+# ----------------------------------------------
+#
+# "Multiple responses of knowledge of languages" represents people
+# reporting knowledge of more than one language.
+#
+# Dividing that count by the total number of knowledge-of-language
+# responses gives the estimated proportion of the population in
+# private households who know multiple languages within each
+# Census Division.
+#
+# The result is stored as a proportion:
+#   e.g., 0.42 = approximately 42% multilingual.
+
+qc_cd_multilingual_rate <- qc_cd_multilingual_rate %>%
+  mutate(
+    multilingual_rate =
+      multiple_language_responses / total_language_responses
+  )
+
+
+# 5. Match the StatCan multilingualism estimates to our Quebec
+#    Census Division lookup table
+# ------------------------------------------------------------
+#
+# GeoUID in the cansim table corresponds to geo_uid from cancensus.
+#
+# Joining by the geographic ID is preferable to joining by region name,
+# because IDs are stable and avoid problems caused by accents,
+# punctuation, spelling differences, or formatting.
+
+cd_multilingual_rate <- qc_geo_cd %>%
+  left_join(
+    qc_cd_multilingual_rate %>%
+      transmute(
+        geo_uid = as.character(GeoUID),
+        multilingual_rate
+      ),
+    by = "geo_uid"
+  )
+
+
+# 6. Merge the regional multilingualism rate into the survey data
+# ---------------------------------------------------------------
+#
+# Each survey participant already has a census_subdivision variable.
+# We therefore attach the Census Division-level multilingualism rate
+# by matching participants to their Census Division.
+#
+# All participants living in the same Census Division receive the same
+# regional multilingualism-rate value.
+
+clean_w_predictors <- data_clean %>%
+  left_join(
+    cd_multilingual_rate,
+    by = "census_subdivision"
+  )
+
+```
+
 
 ```{r adding density of speaker by language}
 # Look for mother tongue variables
@@ -381,30 +649,6 @@ data_clean_long<- languages_heard %>%
 
 ```
 
-
-```{r recode active language use categories to numbers}
-
-clean_w_predictors <- clean_w_predictors %>%
-  mutate(
-    across(
-      c(
-        child_english_active_use_category,
-        child_french_active_use_category,
-        child_first_min_active_use_category,
-        child_second_min_active_use_category,
-        child_third_min_active_use_category
-      ),
-      ~ recode(
-        .x,
-        "My child does not understand or speak this language" = 0,
-        "My child understands this language, but rarely speaks in it" = 1,
-        "My child speaks this language mainly when someone addresses them in that language" = 2,
-        "My child speaks this language spontaneously" = 3
-      )
-    )
-  )
-
-```
 
 
 

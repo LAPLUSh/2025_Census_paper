@@ -76,58 +76,8 @@ first_collection_clean$child_age_years <- time_length(
 
 
 ```
-```{r ading the bilingualism rate variable from cancensus}
 
-#1 let's get the census division data for rate of multilingualism
-
-qc_geo_cd <- get_census(
-  dataset = "CA21",
-  regions = list(PR = "24"),
-  level = "CD",
-  vectors = "v_CA21_1"   # dummy vector just to retrieve geographies
-) %>%
-clean_names() %>%
-distinct(geo_uid, region_name)
-
-#Got the census division names and geo_uid codes so that we can easily get the info from rate of multilingualsim
-#But the name of regions has wierd characters and I need it to match with the names on the survey. So fixing it.
-	
-qc_geo_cd <- qc_geo_cd  %>%
-
-mutate(
-census_subdivision = str_remove(region_name, "[(].*")
-    ) %>%
-  mutate(census_subdivision = str_remove(census_subdivision , "\\s+$")) %>%
-  select(-region_name)
-
-
-
-#Now let's pull the census division bilingualism rate
-qc_cd_bilingual_rate <- get_census(
-  dataset = "CA21",
-  regions = list(PR="24"),
-  level = "CD",
-  vectors = c(
-    total = "v_CA21_1",
-    bilingual = "v_CA21_436"
-  ) ) %>%
-  clean_names() %>%
-  mutate(multilingual_rate = total/ bilingual) |>
-  select(geo_uid, multilingual_rate)
-
-#let's combine information for both
-
-cd_multilingual_rate<-qc_geo_cd %>%
-  left_join(qc_cd_bilingual_rate, by="geo_uid")
-
-
-#finally, let's merge it with our own data frame
-first_collection_w_predictors<- first_collection_clean %>%
-  left_join(cd_multilingual_rate, by="census_subdivision")
-
-
-```
-```{r wrangling other predictors}
+```{r wrangling predictors}
 
 #here we need to make sure we have basically the same columns as in the new data, and coded the same way, e.g. numeric scale.
 
@@ -182,7 +132,7 @@ first_collection_w_predictors <- first_collection_w_predictors %>%
         .x == "I'm not sure" ~ NA_real_,
         TRUE ~ NA_real_
       ),
-      .names = "{.col}_7pt" #preserving th old columns ands adding new 7-point scale columns for reproducibility
+      .names = "{.col}" 
     )
   )
 
@@ -193,56 +143,56 @@ first_collection_w_predictors <- first_collection_w_predictors %>%
 first_collection_w_predictors <- first_collection_w_predictors %>%
   mutate(
     book_resources_english = if_else(
-      is.na(book_resources_english_bookstore_7pt) &
-        is.na(book_resources_english_library_7pt),
+      is.na(book_resources_english_bookstore) &
+        is.na(book_resources_english_library),
       NA_real_,
       pmax(
-        book_resources_english_bookstore_7pt,
-        book_resources_english_library_7pt,
+        book_resources_english_bookstore,
+        book_resources_english_library,
         na.rm = TRUE
       )
     ),
 
     book_resources_french = if_else(
-      is.na(book_resources_french_bookstore_7pt) &
-        is.na(book_resources_french_library_7pt),
+      is.na(book_resources_french_bookstore) &
+        is.na(book_resources_french_library),
       NA_real_,
       pmax(
-        book_resources_french_bookstore_7pt,
-        book_resources_french_library_7pt,
+        book_resources_french_bookstore,
+        book_resources_french_library,
         na.rm = TRUE
       )
     ),
 
     book_resources_first_minority = if_else(
-      is.na(book_resources_first_minority_bookstore_7pt) &
-        is.na(book_resources_first_minority_library_7pt),
+      is.na(book_resources_first_minority_bookstore) &
+        is.na(book_resources_first_minority_library),
       NA_real_,
       pmax(
-        book_resources_first_minority_bookstore_7pt,
-        book_resources_first_minority_library_7pt,
+        book_resources_first_minority_bookstore,
+        book_resources_first_minority_library,
         na.rm = TRUE
       )
     ),
 
     book_resources_second_minority = if_else(
-      is.na(book_resources_second_minority_bookstore_7pt) &
-        is.na(book_resources_second_minority_library_7pt),
+      is.na(book_resources_second_minority_bookstore) &
+        is.na(book_resources_second_minority_library),
       NA_real_,
       pmax(
-        book_resources_second_minority_bookstore_7pt,
-        book_resources_second_minority_library_7pt,
+        book_resources_second_minority_bookstore,
+        book_resources_second_minority_library,
         na.rm = TRUE
       )
     ),
 
     book_resources_third_minority = if_else(
-      is.na(book_resources_third_minority_bookstore_7pt) &
-        is.na(book_resources_third_minority_library_7pt),
+      is.na(book_resources_third_minority_bookstore) &
+        is.na(book_resources_third_minority_library),
       NA_real_,
       pmax(
-        book_resources_third_minority_bookstore_7pt,
-        book_resources_third_minority_library_7pt,
+        book_resources_third_minority_bookstore,
+        book_resources_third_minority_library,
         na.rm = TRUE
       )
     )
@@ -268,264 +218,78 @@ first_collection_w_predictors <- first_collection_w_predictors %>%
         caregiver_1_third_min_proficiency,
         caregiver_2_third_min_proficiency
       ),
-      ~ (.x - 1) * (5 / 6),
-      .names = "{.col}_6pt" # preserve original 7-point columns
+      ~ case_when(
+        .x %in% 1:3 ~ 2,
+        .x %in% 4:7 ~ 3,
+        TRUE ~ NA_real_
+      ),
+.names = "{.col}"
     )
   )
 #the problem with this formula is that we get decimal numbers, perhaps for the best to leave them decimal but could also convert to integers by rounding up or down
 
 
-
-
-
-
-
-
-
-```
-
-
-
-```{r adding density of speaker by language}
-# Look for mother tongue variables
-
-languages_heard<- first_collection_w_predictors %>%
-  dplyr::select(internal_id, census_subdivision, child_english, child_french, child_first_minority, child_second_minority, child_third_minority, geo_uid) %>%
-  pivot_longer(cols=child_english:child_third_minority, names_to="language_type",values_to="language") %>%
-  mutate(language = case_when(
-     language== "Allemand" ~ "German",
-      language== "allemand" ~ "German",
-      language== "Suisse-Allemand"~"German",
-      language== "Espagnol" ~ "Spanish",
-      language== "espagnol" ~ "Spanish",
-      language== "hungarian" ~ "Hungarian",
-      language== "Polonais" ~ "Polish",
-      language== "polonais" ~ "Polish",
-      language== "Spanish and German" ~ "German",
-      language== "francaus et arabe" ~ "Arabic",
-     language==  "Portugais"~ "Portuguese",
-     language==  "Bosnian (Serbian, Croatian)" ~ "Bosnian",
-     language==  "Grec"~ "Greek",
-     language==  "Créole Reunionnais" ~ "Creole",
-      language== "Créole reunionnais"~ "Creole",
-     language==  "Italien"~ "Italian",
-      language== "Lsq" ~ "QSL",
-      language== "LSQ"~ "QSL",
-     language==  "Arménien" ~ "Armenian",
-      language== "Malgache"~ "Malagasy",
-     language==  "Cri"~"Cree",
-                              T~ language
-                              ))
-
-
-
-
-#let's create a list of the languages in the survey
-survey_languages <- languages_heard %>%
-  distinct(language) %>%
-  filter(!is.na(language)) %>%
-  arrange(language)
-
-#retreiving the census 2021 variables
-
-ca21_vectors <- list_census_vectors("CA21")
-
-#now let's find out what the retrieveing vector for mother toungue is in the census data
-
-#This code below helps us get the vectorized codes to pull the languages we want to pull (I went with total)
-mother_tongue_vars <- ca21_vectors %>%
-  filter(
-    str_detect(
-      str_to_lower(label),
-      "mother tongue"
-    )
-  )
-
-#this code below provides the actual individual vectorized codes for each mother tongue
-mother_tongue_children <- child_census_vectors(
-  "v_CA21_1174",
-  leaves_only = TRUE
-)
-
-#A problem is that the first few rows are counting people who speak more than one mother tongue, so I'll identify those rows.
-
-mother_tongue_parents <- ca21_vectors %>%
-  filter(
-    vector %in% unique(mother_tongue_children$parent_vector)
-  ) %>%
-  select(vector, label, parent_vector)
-
-
-multiple_response_vector <- mother_tongue_parents %>%
-  filter(label == "Multiple responses") %>%
-  pull(vector)
-
-multiple_response_children <- child_census_vectors(
-  multiple_response_vector,
-  leaves_only = TRUE
-)
-#This is going to keep census data only for single language responses, since the multiple language responses are like French+non-official language, so I have no way of adjudicating the count to a specific language.
-single_language_vectors <- mother_tongue_children %>%
-  filter(!vector %in% multiple_response_children$vector)
-
-
-#Ok now I can create a look up variable to look up for the census languages that are in my survey
-
-language_lookup <- single_language_vectors %>%
-  select(
-    vector,
-    census_language = label
-  )
-
-#to avoid breaking the r memory by querying too many languages at once, I will break up the query into batches
-
-language_vectors <- language_lookup$vector
-
-# Break vector IDs into batches of 50
-vector_batches <- split(
-  language_vectors,
-  ceiling(seq_along(language_vectors) / 50)
-)
-
-language_batches <- lapply(
-  vector_batches,
-  function(x) {
-    get_census(
-      dataset = "CA21",
-      regions = list(PR = "24"),
-      level = "CD",
-      vectors = x,
-       labels = "short"
-    )
-  }
-)
-
-qc_cd_languages_wide <- language_batches[[1]]
-
-if (length(language_batches) > 1) {
-  
-  for (i in 2:length(language_batches)) {
-    
-    new_vectors <- intersect(
-      language_vectors,
-      names(language_batches[[i]])
-    )
-    
-    qc_cd_languages_wide <- qc_cd_languages_wide %>%
-      left_join(
-        language_batches[[i]] %>%
-          select(GeoUID, all_of(new_vectors)),
-        by = "GeoUID"
+first_collection_w_predictors <- first_collection_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_active_use_category,
+        child_french_active_use_category,
+        child_first_min_active_use_category,
+        child_second_min_active_use_category,
+        child_third_min_active_use_category
+      ),
+      ~ recode(
+        .x,
+        "My child does not understand or speak this language" = 0,
+        "My child understands this language, but rarely speaks in it" = 1,
+        "My child speaks this language mainly when someone addresses them in that language" = 2,
+        "My child speaks this language spontaneously" = 3
       )
-  }
-}
-
-
-qc_cd_languages_wide <- language_batches[[1]]
-
-for (i in 2:length(language_batches)) {
-
-  new_cols <- setdiff(
-    names(language_batches[[i]]),
-    names(qc_cd_languages_wide)
-  )
-
-  qc_cd_languages_wide <- qc_cd_languages_wide %>%
-    left_join(
-      language_batches[[i]] %>%
-        select(GeoUID, all_of(new_cols)),
-      by = "GeoUID"
     )
-}
-
-#making the dataframe long instead of wide
-
-census_language_cd <- qc_cd_languages_wide %>%
-  pivot_longer(
-    cols = starts_with("v_CA21_"),
-    names_to = "vector",
-    values_to = "mother_tongue_n"
   )
 
 
-#joining this dataframe with the language look up
-
-census_language_cd <- census_language_cd %>%
-  left_join(
-    language_lookup,
-    by = "vector"
-  )
-
-#Now I have all the regions, language names, and speaker n. I will add the population denominator to be able to calculate a speaker rate or density
-
-cd_population_mt <- get_census(
-  dataset = "CA21",
-  regions = list(PR = "24"),
-  level = "CD",
-  vectors = "v_CA21_1174",
-  labels = "short"
-)
-
-
-cd_population_mt <- cd_population_mt %>%
-  select(
-    GeoUID,
-    mother_tongue_population = v_CA21_1174
-  )
-
-census_language_cd <- census_language_cd %>%
-  left_join(
-    cd_population_mt,
-    by = "GeoUID"
-  ) %>%
+first_collection_w_predictors <- first_collection_w_predictors %>%
   mutate(
-    mother_tongue_rate = mother_tongue_n / mother_tongue_population,
-    mother_tongue_percent = mother_tongue_rate * 100
-  )
-
-#Checking if the labels in my survey data match the cancensus language labels.
-language_crosswalk <- languages_heard %>%
-  distinct(language) %>%
-  filter(!is.na(language)) %>%
-  rename(survey_language = language) %>%
-  mutate(
-    census_language = case_when(
-      survey_language == "Berber" ~ "Berber languages, n.i.e.",
-      TRUE ~ survey_language
-    ),
-    
-    exact_match = census_language %in% language_lookup$census_language
+    across(
+      c(
+        child_english_mixing,
+        child_french_mixing,
+        child_first_min_mixing,
+        child_second_min_mixing,
+        child_third_min_mixing
+      ),
+      ~ (.x - 1) * (5 / 6),
+      .names = "{.col}"
+    )
   )
 
 
-#Add the survey labels to the lookup table
-
-# census_lookup_final <- language_crosswalk %>%
-#   select(
-#     survey_language,
-#     census_language
-#   ) %>%
-#   left_join(
-#     census_language_cd,
-#     by = "census_language"
-#   )
-# 
-# 
-# data_clean_long<- languages_heard %>%
-#     left_join(
-#     census_lookup_final %>%
-#       select(
-#         survey_language,
-#         GeoUID,
-#         mother_tongue_n,
-#         mother_tongue_population,
-#         mother_tongue_rate,
-#         mother_tongue_percent
-#       ),
-#     by = c(
-#       "language" = "survey_language",
-#       "geo_uid" = "GeoUID"
-#     )
-#   )
 
 ```
+
+
+
+```{r matchig columns to newer data}
+
+#first drop the columns that are not in the new data
+
+first_collection_w_predictors <- first_collection_w_predictors %>%
+  select(-c("survey_date", "child_dob","attends_school","school_or_daycare","school_language","school_language_2","daycare_language","daycarte_language_2","has_siblings", "book_resources_english_library","book_resources_english_bookstore","caregiver_1_english_proficiency_comprehension",   
+"caregiver_2_english_proficiency_comprehension","book_resources_french_library","book_resources_french_bookstore", "book_resources_first_minority_library","book_resources_first_minority_bookstore","caregiver_1_first_min_proficiency_comprehension", "caregiver_2_first_min_proficiency_comprehension","book_resources_second_minority_library","book_resources_second_minority_bookstore",         "caregiver_1_second_min_proficiency_comprehension","caregiver_2_second_min_proficiency_comprehension","book_resources_third_minority_library",           "book_resources_third_minority_bookstore","caregiver_1_third_min_proficiency_comprehension","caregiver_2_third_min_proficiency_comprehension",            "caregiver_1_french_proficiency_comprehension","caregiver_2_french_proficiency_comprehension","book_resources_first_minority_library", "multilingual_childrearing_reason","multilingual_chilrearing_concerns","exclude" ))
+
+
+
+#save to call in the census analyses markdown
+
+write.csv(
+  first_collection_w_predictors,
+  here("Anonymized_data/first_collection_w_predictors.csv"),
+  row.names = FALSE
+)
+
+```
+
+
+
