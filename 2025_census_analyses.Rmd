@@ -16,6 +16,7 @@ library(tidylog)
 library(janitor)
 library(broom)
 library(lubridate)
+library(corrplot)
 library(cancensus)
 options(cancensus.api_key = "CensusMapper_9cd8925d1dd9197227f4bfaf596e0797")
 library(here)
@@ -426,7 +427,7 @@ clean_w_predictors <- clean_w_predictors %>%
 ```
 
 
-```{r}
+```{r adding density of speaker by language}
 
 # ============================================================
 # Create regional speaker rates for languages heard by children
@@ -708,264 +709,96 @@ data_clean_long <- languages_heard %>%
 ```
 
 
-
-
-```{r adding density of speaker by language}
-# Look for mother tongue variables
-
-languages_heard<- clean_w_predictors %>%
-  dplyr::select(internal_id, census_subdivision, child_english, child_french, child_first_minority, child_second_minority, child_third_minority, geo_uid) %>%
-  pivot_longer(cols=child_english:child_third_minority, names_to="language_type",values_to="language") %>%
-  mutate(language = case_when(language == "Anglais"~"English",
-                              language == "Francais"~"French",
-                              language == "Berbère"~"Berber",
-                              language== "Portugais"~"Portuguese",
-                              language==  "Allemand" = "German",
-                              language== "allemand" = "German",
-                              language== "Suisse-Allemand"="German",
-                              language==   "Espagnol" = "Spanish",
-                              language== "espagnol" = "Spanish",
-                              language== "hungarian" = "Hungarian",
-                              language== "Polonais" = "Polish",
-                              language== "polonais" = "Polish",
-                              language== "Spanish and German" = "German",
-                              language== "francaus et arabe" = "Arabic",
-                              language==  "Portugais"= "Portuguese",
-                              language==  "Bosnian (Serbian, Croatian)" = "Bosnian",
-                              language== "Grec"= "Greek",
-                              language== "Créole Reunionnais" = "Creole",
-                              language== "Créole reunionnais"= "Creole",
-                              language== "Italien"= "Italian",
-                              language== "Lsq" = "QSL",
-                              language== "LSQ"= "QSL",
-                              language== "Arménien" = "Armenian",
-                              language==  "Malgache"= "Malagasy",
-                              language== "Cri"="Cree",
-                              T~ language
-                              ))
-
-#let's create a list of the languages in the survey
-survey_languages <- languages_heard %>%
-  distinct(language) %>%
-  filter(!is.na(language)) %>%
-  arrange(language)
-
-#retreiving the census 2021 variables
-
-ca21_vectors <- list_census_vectors("CA21")
-
-#now let's find out what the retrieveing vector for mother toungue is in the census data
-
-#This code below helps us get the vectorized codes to pull the languages we want to pull (I went with total)
-mother_tongue_vars <- ca21_vectors %>%
-  filter(
-    str_detect(
-      str_to_lower(label),
-      "mother tongue"
-    )
-  )
-
-#this code below provides the actual individual vectorized codes for each mother tongue
-mother_tongue_children <- child_census_vectors(
-  "v_CA21_1174",
-  leaves_only = TRUE
-)
-
-#A problem is that the first few rows are counting people who speak more than one mother tongue, so I'll identify those rows.
-
-mother_tongue_parents <- ca21_vectors %>%
-  filter(
-    vector %in% unique(mother_tongue_children$parent_vector)
-  ) %>%
-  select(vector, label, parent_vector)
-
-
-multiple_response_vector <- mother_tongue_parents %>%
-  filter(label == "Multiple responses") %>%
-  pull(vector)
-
-multiple_response_children <- child_census_vectors(
-  multiple_response_vector,
-  leaves_only = TRUE
-)
-#This is going to keep census data only for single language responses, since the multiple language responses are like French+non-official language, so I have no way of adjudicating the count to a specific language.
-single_language_vectors <- mother_tongue_children %>%
-  filter(!vector %in% multiple_response_children$vector)
-
-
-#Ok now I can create a look up variable to look up for the census languages that are in my survey
-
-language_lookup <- single_language_vectors %>%
-  select(
-    vector,
-    census_language = label
-  )
-
-#to avoid breaking the r memory by querying too many languages at once, I will break up the query into batches
-
-language_vectors <- language_lookup$vector
-
-# Break vector IDs into batches of 50
-vector_batches <- split(
-  language_vectors,
-  ceiling(seq_along(language_vectors) / 50)
-)
-
-language_batches <- lapply(
-  vector_batches,
-  function(x) {
-    get_census(
-      dataset = "CA21",
-      regions = list(PR = "24"),
-      level = "CD",
-      vectors = x,
-       labels = "short"
-    )
-  }
-)
-
-qc_cd_languages_wide <- language_batches[[1]]
-
-if (length(language_batches) > 1) {
-  
-  for (i in 2:length(language_batches)) {
-    
-    new_vectors <- intersect(
-      language_vectors,
-      names(language_batches[[i]])
-    )
-    
-    qc_cd_languages_wide <- qc_cd_languages_wide %>%
-      left_join(
-        language_batches[[i]] %>%
-          select(GeoUID, all_of(new_vectors)),
-        by = "GeoUID"
-      )
-  }
-}
-
-
-qc_cd_languages_wide <- language_batches[[1]]
-
-for (i in 2:length(language_batches)) {
-
-  new_cols <- setdiff(
-    names(language_batches[[i]]),
-    names(qc_cd_languages_wide)
-  )
-
-  qc_cd_languages_wide <- qc_cd_languages_wide %>%
-    left_join(
-      language_batches[[i]] %>%
-        select(GeoUID, all_of(new_cols)),
-      by = "GeoUID"
-    )
-}
-
-#making the dataframe long instead of wide
-
-census_language_cd <- qc_cd_languages_wide %>%
-  pivot_longer(
-    cols = starts_with("v_CA21_"),
-    names_to = "vector",
-    values_to = "mother_tongue_n"
-  )
-
-
-#joining this dataframe with the language look up
-
-census_language_cd <- census_language_cd %>%
-  left_join(
-    language_lookup,
-    by = "vector"
-  )
-
-#Now I have all the regions, language names, and speaker n. I will add the population denominator to be able to calculate a speaker rate or density
-
-cd_population_mt <- get_census(
-  dataset = "CA21",
-  regions = list(PR = "24"),
-  level = "CD",
-  vectors = "v_CA21_1174",
-  labels = "short"
-)
-
-
-cd_population_mt <- cd_population_mt %>%
-  select(
-    GeoUID,
-    mother_tongue_population = v_CA21_1174
-  )
-
-census_language_cd <- census_language_cd %>%
-  left_join(
-    cd_population_mt,
-    by = "GeoUID"
-  ) %>%
-  mutate(
-    mother_tongue_rate = mother_tongue_n / mother_tongue_population,
-    mother_tongue_percent = mother_tongue_rate * 100
-  )
-
-#Checking if the labels in my survey data match the cancensus language labels.
-language_crosswalk <- languages_heard %>%
-  distinct(language) %>%
-  filter(!is.na(language)) %>%
-  rename(survey_language = language) %>%
-  mutate(
-    census_language = case_when(
-      survey_language == "Berber" ~ "Berber languages, n.i.e.",
-      TRUE ~ survey_language
-    ),
-    
-    exact_match = census_language %in% language_lookup$census_language
-  )
-
-
-#Add the survey labels to the lookup table
-
-census_lookup_final <- language_crosswalk %>%
-  select(
-    survey_language,
-    census_language
-  ) %>%
-  left_join(
-    census_language_cd,
-    by = "census_language"
-  )
-
-
-data_clean_long<- languages_heard %>%
-    left_join(
-    census_lookup_final %>%
-      select(
-        survey_language,
-        GeoUID,
-        mother_tongue_n,
-        mother_tongue_population,
-        mother_tongue_rate,
-        mother_tongue_percent
-      ),
-    by = c(
-      "language" = "survey_language",
-      "geo_uid" = "GeoUID"
-    )
-  )
-
-```
-
-
-
-
 ```{r statistical analyses language agnostic}
 
 #pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
 #For the matrix at least run each concern and attitude separate.
 
+for_correlation <- clean_w_predictors %>%
+  select(beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching, multilingual_rate)
 
-#Base model
+
+#making an average categorical active use measure for the language agnostic analyses
+for_correlation<- for_correlation %>%
+  mutate(
+    child_active_use_mean = rowMeans(
+      across(
+        c(
+          child_french_active_use_category,
+          child_english_active_use_category,
+          child_first_min_active_use_category,
+          child_second_min_active_use_category,
+          child_third_min_active_use_category
+        )
+      ),
+      na.rm = TRUE
+    ),
+    child_active_use_mean = ifelse(
+      is.nan(child_active_use_mean),
+      NA_real_,
+      child_active_use_mean
+    )
+  )
+
+#making an average continuous active use measure for the language agnostic analyses
+for_correlation<- for_correlation %>%
+  mutate(
+    child_interlocutor_matching_mean = rowMeans(
+      across(
+        c(child_french_interlocutor_matching, 
+child_english_interlocutor_matching, 
+child_first_min_interlocutor_matching, 
+child_second_min_interlocutor_matching, 
+child_third_min_interlocutor_matching
+        )
+      ),
+      na.rm = TRUE
+    ),
+    child_interlocutor_matching_mean = ifelse(
+      is.nan(child_interlocutor_matching_mean),
+      NA_real_,
+      child_interlocutor_matching_mean
+    )
+  )
+
+
+for_correlation <- for_correlation %>%
+  select(-child_french_active_use_category, -child_english_active_use_category, -child_first_min_active_use_category, -child_second_min_active_use_category, -child_third_min_active_use_category, -child_french_interlocutor_matching, -child_english_interlocutor_matching, -child_first_min_interlocutor_matching, -child_second_min_interlocutor_matching, -child_third_min_interlocutor_matching)
+
+for_correlation <- for_correlation %>%
+  mutate(across(everything(), as.numeric))
+
+
+
+language_agnostic_correlation <- cor(
+ for_correlation,
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+
+corrplot(
+  language_agnostic_correlation,
+  method = "circle",
+  type = "upper",
+  diag = TRUE,
+  tl.col = "black",
+  tl.srt = 45,
+)
+
+
+
+#Base model categories
+
+base_category<- lm(child_active_use_mean~ multilingual_rate, data= for_correlation )
+summary(base_category)
+
+#Base model interlocutor
+base_interlocutor<- lm(child_interlocutor_matching_mean~ multilingual_rate, data= for_correlation )
+summary(base_interlocutor)
+
 #active_use~child_age+multiliningualism_rate
-#active use will be averaged across languages for the following variable: interlocutor matching + exploratory analyses with the categorical variable
+
 #run the aoa as a factor in an exploratory fashion
 
 #attitudes model 
