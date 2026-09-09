@@ -417,13 +417,297 @@ cd_multilingual_rate <- qc_geo_cd %>%
 # All participants living in the same Census Division receive the same
 # regional multilingualism-rate value.
 
-clean_w_predictors <- data_clean %>%
+clean_w_predictors <- clean_w_predictors %>%
   left_join(
     cd_multilingual_rate,
     by = "census_subdivision"
   )
 
 ```
+
+
+```{r}
+
+# ============================================================
+# Create regional speaker rates for languages heard by children
+# using 2021 Census "Knowledge of languages" data
+# ============================================================
+
+
+# 1. Put children's languages into long format
+# ---------------------------------------------
+
+languages_heard <- clean_w_predictors %>%
+  dplyr::select(
+    internal_id,
+    census_subdivision,
+    child_english,
+    child_french,
+    child_first_minority,
+    child_second_minority,
+    child_third_minority,
+    geo_uid
+  ) %>%
+  pivot_longer(
+    cols = child_english:child_third_minority,
+    names_to = "language_type",
+    values_to = "language"
+  ) %>%
+  mutate(
+    language = case_when(
+      language == "Anglais" ~ "English",
+      language == "Francais" ~ "French",
+      language == "Berbère" ~ "Berber",
+      language == "Portugais" ~ "Portuguese",
+      language == "Allemand" ~ "German",
+      language == "allemand" ~ "German",
+      language == "Suisse-Allemand" ~ "German",
+      language == "Espagnol" ~ "Spanish",
+      language == "espagnol" ~ "Spanish",
+      language == "hungarian" ~ "Hungarian",
+      language == "Polonais" ~ "Polish",
+      language == "polonais" ~ "Polish",
+      language == "Spanish and German" ~ "German",
+      language == "francaus et arabe" ~ "Arabic",
+      language == "Bosnian (Serbian, Croatian)" ~ "Bosnian",
+      language == "Grec" ~ "Greek",
+      language == "Créole Reunionnais" ~ "Creole",
+      language == "Créole reunionnais" ~ "Creole",
+      language == "Italien" ~ "Italian",
+      language == "Lsq" ~ "QSL",
+      language == "LSQ" ~ "QSL",
+      language == "Arménien" ~ "Armenian",
+      language == "Malgache" ~ "Malagasy",
+      language == "Cri" ~ "Cree",
+      TRUE ~ language
+    )
+  )
+
+
+# Create a list of the unique languages represented in the survey.
+# This is useful for checking whether our survey labels match the
+# Statistics Canada language labels.
+
+survey_languages <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  arrange(language)
+
+
+
+# ============================================================
+# Retrieve 2021 Census "Knowledge of languages" vectors
+# ============================================================
+
+ca21_vectors <- list_census_vectors("CA21")
+
+
+# v_CA21_3229 is the parent vector for:
+# "Knowledge of languages for the population in private households"
+#
+# This is based on the 2021 Census 25% sample data and contains
+# both official and non-official languages.
+
+knowledge_language_children <- child_census_vectors(
+  "v_CA21_3229",
+  leaves_only = TRUE
+)
+
+
+# Keep only the individual language vectors.
+#
+# Using leaves_only = TRUE removes broad aggregate categories such as
+# "Official languages", "Non-official languages", "Indigenous languages",
+# etc., leaving the most specific language categories available.
+
+language_lookup <- knowledge_language_children %>%
+  select(
+    vector,
+    census_language = label
+  )
+
+
+
+#to avoid breaking the r memory by querying too many languages at once, I will break up the query into batches
+
+language_vectors <- language_lookup$vector
+
+# ============================================================
+# Download the language counts for Quebec Census Divisions
+# ============================================================
+#
+# The Census contains many language vectors, so the vectors are split
+# into batches of 50 to avoid making a very large query at once.
+
+language_vectors <- language_lookup$vector
+
+vector_batches <- split(
+  language_vectors,
+  ceiling(seq_along(language_vectors) / 50)
+)
+
+
+language_batches <- lapply(
+  vector_batches,
+  function(x) {
+    get_census(
+      dataset = "CA21",
+      regions = list(PR = "24"),
+      level = "CD",
+      vectors = x,
+      labels = "short"
+    )
+  }
+)
+
+# Start with the first batch.
+
+qc_cd_languages_wide <- language_batches[[1]]
+
+
+# Add the remaining batches by matching Census Divisions on GeoUID.
+
+if (length(language_batches) > 1) {
+
+  for (i in 2:length(language_batches)) {
+
+    new_cols <- setdiff(
+      names(language_batches[[i]]),
+      names(qc_cd_languages_wide)
+    )
+
+    qc_cd_languages_wide <- qc_cd_languages_wide %>%
+      left_join(
+        language_batches[[i]] %>%
+          select(GeoUID, all_of(new_cols)),
+        by = "GeoUID"
+      )
+  }
+}
+
+
+census_language_cd <- qc_cd_languages_wide %>%
+  pivot_longer(
+    cols = starts_with("v_CA21_"),
+    names_to = "vector",
+    values_to = "language_knowledge_n"
+  )
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    language_lookup,
+    by = "vector"
+  )
+
+
+# ============================================================
+# Retrieve denominator for language knowledge rates
+# ============================================================
+#
+# v_CA21_3229 represents the population in private households
+# covered by the Census "Knowledge of languages" measure.
+#
+# Using this as the denominator ensures that the language-specific
+# counts and the population denominator come from the same Census
+# concept and statistical universe.
+
+cd_population_knowledge <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CD",
+  vectors = "v_CA21_3229",
+  labels = "short"
+)
+
+
+cd_population_knowledge <- cd_population_knowledge %>%
+  select(
+    GeoUID,
+    knowledge_language_population = v_CA21_3229
+  )
+
+
+
+# ============================================================
+# Calculate regional prevalence of knowledge of each language
+# ============================================================
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    cd_population_knowledge,
+    by = "GeoUID"
+  ) %>%
+  mutate(
+    language_knowledge_rate =
+      language_knowledge_n / knowledge_language_population,
+
+    language_knowledge_percent =
+      language_knowledge_rate * 100
+  )
+
+
+
+
+#Check language matches
+
+language_crosswalk <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  rename(survey_language = language) %>%
+  mutate(
+    census_language = case_when(
+      survey_language == "Berber" ~ "Berber languages, n.i.e.",
+      survey_language == "Persian" ~ "Persian (Farsi), n.o.s.",
+      survey_language == "Punjabi" ~ "Punjabi (Panjabi)",
+      survey_language == "Malagasy" ~ "Malagasy, n.o.s.",
+      survey_language == "QSL" ~ "Quebec Sign Language",
+      survey_language == "Cree" ~ "Cree, n.o.s.",
+      TRUE ~ survey_language
+    ),
+
+    exact_match =
+      census_language %in% language_lookup$census_language
+  )
+
+
+language_crosswalk %>%
+  filter(!exact_match)
+
+
+
+#final joins
+census_lookup_final <- language_crosswalk %>%
+  select(
+    survey_language,
+    census_language
+  ) %>%
+  left_join(
+    census_language_cd,
+    by = "census_language"
+  )
+
+
+data_clean_long <- languages_heard %>%
+  left_join(
+    census_lookup_final %>%
+      select(
+        survey_language,
+        GeoUID,
+        language_knowledge_n,
+        knowledge_language_population,
+        language_knowledge_rate,
+        language_knowledge_percent
+      ),
+    by = c(
+      "language" = "survey_language",
+      "geo_uid" = "GeoUID"
+    )
+  )
+
+
+```
+
+
 
 
 ```{r adding density of speaker by language}
@@ -436,6 +720,27 @@ languages_heard<- clean_w_predictors %>%
                               language == "Francais"~"French",
                               language == "Berbère"~"Berber",
                               language== "Portugais"~"Portuguese",
+                              language==  "Allemand" = "German",
+                              language== "allemand" = "German",
+                              language== "Suisse-Allemand"="German",
+                              language==   "Espagnol" = "Spanish",
+                              language== "espagnol" = "Spanish",
+                              language== "hungarian" = "Hungarian",
+                              language== "Polonais" = "Polish",
+                              language== "polonais" = "Polish",
+                              language== "Spanish and German" = "German",
+                              language== "francaus et arabe" = "Arabic",
+                              language==  "Portugais"= "Portuguese",
+                              language==  "Bosnian (Serbian, Croatian)" = "Bosnian",
+                              language== "Grec"= "Greek",
+                              language== "Créole Reunionnais" = "Creole",
+                              language== "Créole reunionnais"= "Creole",
+                              language== "Italien"= "Italian",
+                              language== "Lsq" = "QSL",
+                              language== "LSQ"= "QSL",
+                              language== "Arménien" = "Armenian",
+                              language==  "Malgache"= "Malagasy",
+                              language== "Cri"="Cree",
                               T~ language
                               ))
 
