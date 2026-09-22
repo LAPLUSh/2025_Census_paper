@@ -734,283 +734,6 @@ data_clean_long<- data_clean_long %>%
 
 
 
-```{r presentation descriptives}
-
-
-# ============================================================
-# PRESENTATION DESCRIPTIVES
-# ============================================================
-
-# One row per child
-child_level <- long_with_predictors %>%
-  filter(
-    child_age_years >= 3,
-    child_age_years <9
-  ) %>%
-  distinct(internal_id, .keep_all = TRUE)
-
-
-#Santity check
-nrow(long_with_predictors)   # long language-level dataset
-nrow(child_level)        # unique children
-
-
-n_keepers <- child_level %>%
-  summarise(n = n_distinct(internal_id))
-
-n_keepers
-
-gender_summary <- child_level %>%
-  count(child_gender, name = "n") %>%
-  mutate(
-    percent = round(n / sum(n) * 100, 1)
-  )
-
-gender_summary
-
-# Pie chart of child gender
-ggplot(
-  gender_summary,
-  aes(x = "", y = n, fill = child_gender)
-) +
-  geom_col(
-    width = 1,
-    color = "white"
-  ) +
-  coord_polar(theta = "y") +
-  geom_text(
-    aes(
-      label = paste0(
-        child_gender, "\n",
-        "n = ", n, " (", percent, "%)"
-      )
-    ),
-    position = position_stack(vjust = 0.5),
-    size = 4
-  ) +
-  labs(
-    fill = "Child gender"
-  ) +
-  theme_void(base_size = 14) +
-  theme(
-    legend.position = "none"
-  )
-
-
-age_summary <- child_level %>%
-  summarise(
-    n = sum(!is.na(child_age_years)),
-    mean_age = round(mean(child_age_years, na.rm = TRUE), 2),
-    sd_age = round(sd(child_age_years, na.rm = TRUE), 2),
-    min_age = min(child_age_years, na.rm = TRUE),
-    max_age = max(child_age_years, na.rm = TRUE)
-  )
-
-age_summary
-
-
-region_summary <- child_level %>%
-  filter(!is.na(census_subdivision)) %>%
-  count(census_subdivision, sort = TRUE, name = "n") %>%
-  mutate(
-    percent = round(n / sum(n) * 100, 1)
-  )
-
-region_summary
-
-n_regions <- child_level %>%
-  summarise(
-    n_regions = n_distinct(census_subdivision, na.rm = TRUE)
-  )
-
-n_regions
-
-languages_per_child <- long_with_predictors %>%
-  filter(!is.na(language)) %>%
-  distinct(internal_id, language) %>%
-  count(internal_id, name = "n_languages") %>%
-      filter(!(n_languages==1)) # I need to do this before so this child is filtered.
-
-
-ggplot(
-  region_summary,
-  aes(
-    x = n,
-    y = reorder(census_subdivision, n)
-  )
-) +
-  geom_col(width = 0.7) +
-  geom_text(
-    aes(label = paste0(n, " (", percent, "%)")),
-    hjust = -0.2,
-    size = 3.8
-  ) +
-  labs(
-    x = "Number of children",
-    y = NULL
-  ) +
-  scale_x_continuous(
-    breaks = scales::pretty_breaks(),
-    expand = expansion(mult = c(0, 0.18))
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank()
-  )
-
-
-multilingual_summary <- languages_per_child %>%
-  mutate(
-    language_group = case_when(
-      n_languages == 1 ~ "Monolingual",
-      n_languages == 2 ~ "Bilingual",
-      n_languages == 3 ~ "Trilingual",
-      n_languages >= 4 ~ "4+ languages"
-    )
-  ) %>%
-  count(language_group, name = "n") %>%
-  mutate(
-    percent = round(n / sum(n) * 100, 1)
-  )
-
-multilingual_summary
-
-
-multilingual_summary <- multilingual_summary %>%
-  mutate(
-    language_group = factor(
-      language_group,
-      levels = c(
-        "Monolingual",
-        "Bilingual",
-        "Trilingual",
-        "4+ languages"
-      )
-    )
-  )
-
-ggplot(
-  multilingual_summary,
-  aes(x = "", y = n, fill = language_group)
-) +
-  geom_col(
-    width = 1,
-    color = "white"
-  ) +
-  coord_polar(theta = "y") +
-  geom_text(
-    aes(label = paste0(n, " (", percent, "%)")),
-    position = position_stack(vjust = 0.5),
-    size = 4
-  ) +
-  labs(
-    fill = "Number of languages"
-  ) +
-  theme_void(base_size = 14) +
-  theme(
-    legend.position = "right"
-  )
-
-
-
-
-language_group_summary <- long_with_predictors %>%
-  group_by(internal_id) %>%
-  summarise(
-    French = any(language == "French", na.rm = TRUE),
-    English = any(language == "English", na.rm = TRUE),
-    Minority = any(
-      !language %in% c("French", "English") & !is.na(language)
-    ),
-    .groups = "drop"
-  ) %>%
-  pivot_longer(
-    cols = c(French, English, Minority),
-    names_to = "language_group",
-    values_to = "present"
-  ) %>%
-  filter(present) %>%
-  count(language_group, name = "n") %>%
-  mutate(
-    percent = round(n / n_distinct(long_with_predictors$internal_id) * 100, 1)
-  )
-
-language_group_summary
-
-ggplot(
-  language_group_summary,
-  aes(x = language_group, y = n)
-) +
-  geom_col(width = 0.65) +
-  geom_text(
-    aes(label = paste0(n, " (", percent, "%)")),
-    vjust = -0.4,
-    size = 4
-  ) +
-  labs(
-    x = NULL,
-    y = "Number of children"
-  ) +
-  scale_y_continuous(
-    expand = expansion(mult = c(0, 0.12))
-  ) +
-  theme_minimal(base_size = 14) +
-  theme(
-    panel.grid.major.x = element_blank(),
-    panel.grid.minor = element_blank()
-  )
-
-minority_language_summary <- long_with_predictors %>%
-  filter(
-    !is.na(language),
-    !language %in% c("French", "English")
-  ) %>%
-  distinct(internal_id, language) %>%
-  count(language, sort = TRUE, name = "n_children") %>%
-  mutate(
-    percent_sample = round(
-      n_children / n_distinct(long_with_predictors$internal_id) * 100,
-      1
-    )
-  )
-
-minority_language_summary
-
-ggplot(
-  minority_language_summary,
-  aes(
-    x = n_children,
-    y = reorder(language, n_children)
-  )
-) +
-  geom_col(width = 0.7) +
-  geom_text(
-    aes(label = n_children),
-    hjust = -0.3,
-    size = 3.8
-  ) +
-  labs(
-    x = "Number of children",
-    y = NULL
-  ) +
-  scale_x_continuous(
-    breaks = scales::pretty_breaks(),
-    expand = expansion(mult = c(0, 0.1))
-  ) +
-  theme_minimal(base_size = 13) +
-  theme(
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank()
-  )
-
-
-
-
-```
-
-
-
 ```{r statistical analyses language agnostic}
 
 #pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
@@ -1104,8 +827,8 @@ cat_beleifs_model_3<- lm(child_active_use_mean~ multilingual_rate + child_age_ye
 #worries categorical models
 
 cat_worries_model_1<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages, data= for_correlation)
-cat_worries_model_2<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + worry_cognitive_difficulties, data= for_correlation)
-cat_worries_model_3<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + worry_cognitive_difficulties + worry_school_difficulties, data= for_correlation)
+cat_worries_model_2<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + concern_cognitive_difficulties, data= for_correlation)
+cat_worries_model_3<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + concern_cognitive_difficulties + concern_school_difficulties, data= for_correlation)
 
 
 #Base model interlocutor
@@ -1160,7 +883,7 @@ english_cor_data <- english_cor_data %>%
 english_correlation <- cor(
  english_cor_data,
   use = "pairwise.complete.obs",
-  method = "pearson"
+  method = "spearman"
 )
 
 
@@ -1193,7 +916,7 @@ french_cor_data <- french_cor_data %>%
 french_correlation <- cor(
  french_cor_data,
   use = "pairwise.complete.obs",
-  method = "pearson"
+  method = "spearman"
 )
 
 
@@ -1334,7 +1057,7 @@ minority_cor_data_matrix <- minority_cor_data_matrix %>%
 minority_correlation <- cor(
  minority_cor_data_matrix,
   use = "pairwise.complete.obs",
-  method = "pearson"
+  method = "spearman"
 )
 
 
@@ -1471,7 +1194,7 @@ cor_plot_data <- cor_plot_data %>%
         "book_resources_english",
         "book_resources_french",
         "minority_book_resources"
-      ) ~ "Book resources",
+      ) ~ "Access to books",
       
       predictor %in% c(
         "caregiver_english_book_reading",
@@ -1479,13 +1202,13 @@ cor_plot_data <- cor_plot_data %>%
         "minority_book_reading"
       ) ~ "Book reading",
       
-      predictor == "beleifs_ahead_in_life" ~ "status attitudes",
-      predictor == "beleifs_belonging" ~ "solidarity attitudes",
-      predictor == "beliefs_cognitive_benefits" ~ "cognition attitudes",
+      predictor == "beleifs_ahead_in_life" ~ "Status attitudes",
+      predictor == "beleifs_belonging" ~ "Solidarity attitudes",
+      predictor == "beliefs_cognitive_benefits" ~ "Cognition attitudes",
       
-      predictor == "worry_master_languages" ~ "exposure-fluency worries",
-      predictor == "worry_cognitive_difficulties" ~ "cognitive difficulties worries",
-      predictor == "worry_school_difficulties" ~ "school difficulties worries",
+      predictor == "worry_master_languages" ~ "Exposure-fluency concern",
+      predictor == "worry_cognitive_difficulties" ~ "Cognitive difficulties concern",
+      predictor == "worry_school_difficulties" ~ "School difficulties concern",
       
       TRUE ~ predictor
     )
@@ -1501,15 +1224,15 @@ cor_plot_data <- cor_plot_data %>%
 predictor_order <- c(
   "Child age",
   "Speaker rate",
-  "Book resources",
+  "Access to books",
   "Overall exposure",
   "Book reading",
-"status attitudes",
-"solidarity attitudes",
-"cognition attitudes",
-"exposure-fluency worries",
-"cognitive difficulties worries",
-"school difficulties worries"
+"Status attitudes",
+"Solidarity attitudes",
+"Cognition attitudes",
+"Exposure-fluency concern",
+"Cognitive difficulties concern",
+"School difficulties concern"
 )
 
 cor_plot_data <- cor_plot_data %>%
@@ -1605,9 +1328,9 @@ english_model_data <- long_with_predictors %>%
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = worry_master_languages,
-    cognitive_difficulties_worries = worry_cognitive_difficulties,
-    school_difficulties_worries = worry_school_difficulties
+    exposure_fluency_worries = concern_master_languages,
+    cognitive_difficulties_worries = concern_cognitive_difficulties,
+    school_difficulties_worries = concern_school_difficulties
   )
 
 
@@ -1638,9 +1361,9 @@ french_model_data <- long_with_predictors %>%
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = worry_master_languages,
-    cognitive_difficulties_worries = worry_cognitive_difficulties,
-    school_difficulties_worries = worry_school_difficulties
+    exposure_fluency_worries = concern_master_languages,
+    cognitive_difficulties_worries = concern_cognitive_difficulties,
+    school_difficulties_worries = concern_school_difficulties
   )
 
 
@@ -1669,9 +1392,9 @@ minority_model_data <- minority_cor_data %>%
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = worry_master_languages,
-    cognitive_difficulties_worries = worry_cognitive_difficulties,
-    school_difficulties_worries = worry_school_difficulties
+    exposure_fluency_worries = concern_master_languages,
+    cognitive_difficulties_worries = concern_cognitive_difficulties,
+    school_difficulties_worries = concern_school_difficulties
   )
 
 
@@ -2536,3 +2259,662 @@ performance::check_model(matching_final)
 
 ```
 
+
+
+
+```{r presentation descriptives}
+
+
+# ============================================================
+# PRESENTATION DESCRIPTIVES
+# ============================================================
+
+# One row per child
+child_level <- long_with_predictors %>%
+  filter(
+    child_age_years >= 3,
+    child_age_years <9
+  ) %>%
+  distinct(internal_id, .keep_all = TRUE)
+
+
+#Santity check
+nrow(long_with_predictors)   # long language-level dataset
+nrow(child_level)        # unique children
+
+
+n_keepers <- child_level %>%
+  summarise(n = n_distinct(internal_id))
+
+n_keepers
+
+
+#------------------------------------------
+# GENDER SUMMARY
+#------------------------------------------
+
+
+gender_summary <- child_level %>%
+  count(child_gender, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+gender_summary
+
+# Pie chart of child gender
+ggplot(
+  gender_summary,
+  aes(x = "", y = n, fill = child_gender)
+) +
+  geom_col(
+    width = 1,
+    color = "white"
+  ) +
+  coord_polar(theta = "y") +
+  
+  # Custom slice colors
+  scale_fill_manual(
+    values = c(
+      "#B0DA87",
+      "#FAE0BD",
+      "#8DAEE1"
+    )
+  ) +
+  
+  geom_text(
+    aes(
+      label = paste0(
+        child_gender, "\n",
+        "n = ", n, " (", percent, "%)"
+      )
+    ),
+    position = position_stack(vjust = 0.5),
+    size = 15 / ggplot2::.pt   # 15-point font
+  ) +
+  
+  labs(
+    fill = "Child gender"
+  ) +
+  
+  theme_void(base_size = 20) +
+  
+  theme(
+    legend.position = "none"
+  )
+
+
+
+#---------------------------------------------------------------
+# PARENT GENDER SUMMARY
+#---------------------------------------------------------------
+
+respondent_summary <- child_level %>%
+  count(caregiver_1, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+
+# Pie chart of respondent
+ggplot(
+  respondent_summary,
+  aes(x = "", y = n, fill = caregiver_1)
+) +
+  geom_col(
+    width = 1,
+    color = "white"
+  ) +
+  coord_polar(theta = "y") +
+  
+  # Custom slice colors
+  scale_fill_manual(
+    values = c(
+      "#B0DA87",
+      "#FAE0BD",
+      "#8DAEE1"
+    )
+  ) +
+  
+  geom_text(
+    aes(
+      label = paste0(
+        caregiver_1, "\n",
+        "n = ", n, " (", percent, "%)"
+      )
+    ),
+    position = position_stack(vjust = 0.3),
+    size = 15 / ggplot2::.pt   # 15-point font
+  ) +
+  
+  labs(
+    fill = "caregiver_1"
+  ) +
+  
+  theme_void(base_size = 25) +
+  
+  theme(
+    legend.position = "none"
+  )
+
+
+
+
+#---------------------------------------------------------------
+# AGE SUMMARY
+#---------------------------------------------------------------
+
+age_summary <- child_level %>%
+  summarise(
+    n = sum(!is.na(child_age_years)),
+    mean_age = round(mean(child_age_years, na.rm = TRUE), 2),
+    sd_age = round(sd(child_age_years, na.rm = TRUE), 2),
+    min_age = min(child_age_years, na.rm = TRUE),
+    max_age = max(child_age_years, na.rm = TRUE)
+  )
+
+age_summary
+
+#--------------------------
+# REGION SUMMARY
+#-------------------------
+
+
+
+region_summary <- child_level %>%
+  filter(!is.na(census_subdivision)) %>%
+  count(census_subdivision, sort = TRUE, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+region_summary
+
+n_regions <- child_level %>%
+  summarise(
+    n_regions = n_distinct(census_subdivision, na.rm = TRUE)
+  )
+
+n_regions
+
+languages_per_child <- long_with_predictors %>%
+  filter(!is.na(language)) %>%
+  distinct(internal_id, language) %>%
+  count(internal_id, name = "n_languages") %>%
+      filter(!(n_languages==1)) # I need to do this before so this child is filtered.
+
+
+ggplot(
+  region_summary,
+  aes(
+    x = n,
+    y = reorder(census_subdivision, n)
+  )
+) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = paste0(n, " (", percent, "%)")),
+    hjust = -0.2,
+    size = 3.8
+  ) +
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  scale_x_continuous(
+    breaks = scales::pretty_breaks(),
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Keep the six most represented regions
+top_regions <- region_summary %>%
+  filter(
+    census_subdivision %in% c(
+      "Montréal",
+      "Québec",
+      "Gatineau",
+      "Sherbrooke",
+      "Rivière-du-Loup",
+      "Drummond"
+    )
+  ) %>%
+  mutate(
+    census_subdivision = factor(
+      census_subdivision,
+      levels = c(
+        "Drummond",
+        "Rivière-du-Loup",
+        "Sherbrooke",
+        "Gatineau",
+        "Québec",
+        "Montréal"
+      )
+    )
+  )
+
+ggplot(
+  top_regions,
+  aes(
+    x = n,
+    y = census_subdivision,
+    fill = census_subdivision
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  
+  # n and percentage at the end of each bar
+  geom_text(
+    aes(
+      label = paste0(
+        n, " (", percent, "%)"
+      )
+    ),
+    hjust = -0.15,
+    size = 15 / ggplot2::.pt
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      "Montréal"       = "#B0DA87",
+      "Québec"         = "#FAE0BD",
+      "Gatineau"       = "#8DAEE1",
+      "Sherbrooke"     = "#C6A7D8",
+      "Rivière-du-Loup" = "#86C5B5",
+      "Drummond"       = "#F4B183"
+    )
+  ) +
+  
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  
+  theme_classic(base_size = 35) +
+  
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20),
+    axis.title.x = element_text(size = 20)
+  )
+
+
+
+#---------------------------------------------
+#LANGUAGE COMBINATION
+#--------------------------------------------
+
+# 1. IDENTIFY EACH CHILD'S LANGUAGE COMBINATION
+
+
+language_composition <- model_data_long %>%
+  
+  # One row per child-language
+  distinct(internal_id, language, language_type) %>%
+  
+  group_by(internal_id) %>%
+  
+  summarise(
+    n_languages = n_distinct(language),
+    
+    n_english = sum(language_type == "English"),
+    n_french = sum(language_type == "French"),
+    n_minority = sum(language_type == "Minority"),
+    
+    .groups = "drop"
+  ) %>%
+  
+  # Broad number-of-languages category
+  mutate(
+    multilingual_group = case_when(
+      n_languages == 1 ~ "Monolingual",
+      n_languages == 2 ~ "Bilingual",
+      n_languages == 3 ~ "Trilingual",
+      n_languages >= 4 ~ "4+ languages"
+    ),
+    
+    # Composition within each category
+    language_combination = case_when(
+      
+      # -----------------------
+      # Monolingual
+      # -----------------------
+      n_languages == 1 & n_english == 1 ~ "English",
+      n_languages == 1 & n_french == 1 ~ "French",
+      n_languages == 1 & n_minority == 1 ~ "Minority",
+      
+      
+      # -----------------------
+      # Bilingual
+      # -----------------------
+      n_languages == 2 &
+        n_english == 1 & n_french == 1 ~
+        "English + French",
+      
+      n_languages == 2 &
+        n_english == 1 & n_minority == 1 ~
+        "English + Minority",
+      
+      n_languages == 2 &
+        n_french == 1 & n_minority == 1 ~
+        "French + Minority",
+      
+      n_languages == 2 &
+        n_minority == 2 ~
+        "Minority + Minority",
+      
+      
+      # -----------------------
+      # Trilingual
+      # -----------------------
+      n_languages == 3 &
+        n_english == 1 &
+        n_french == 1 &
+        n_minority == 1 ~
+        "English + French + Minority",
+      
+      n_languages == 3 &
+        n_english == 1 &
+        n_minority == 2 ~
+        "English + 2 Minority",
+      
+      n_languages == 3 &
+        n_french == 1 &
+        n_minority == 2 ~
+        "French + 2 Minority",
+      
+      n_languages == 3 &
+        n_minority == 3 ~
+        "3 Minority",
+      
+      
+      # -----------------------
+      # 4+
+      # -----------------------
+      n_languages >= 4 ~ "4+ languages",
+      
+      TRUE ~ "Other"
+    )
+  )
+
+
+
+language_composition %>%
+  count(
+    multilingual_group,
+    language_combination
+  )
+
+
+# ============================================================
+# 2. CREATE STACKED-BAR DATA
+# ============================================================
+
+language_composition_summary <- language_composition %>%
+  count(
+    multilingual_group,
+    language_combination,
+    name = "n"
+  ) %>%
+  group_by(multilingual_group) %>%
+  mutate(
+    group_total = sum(n),
+    percent_within_group = n / group_total * 100
+  ) %>%
+  ungroup() %>%
+  mutate(
+    total_sample = sum(n),
+    group_percent = group_total / total_sample * 100,
+    
+    multilingual_group = factor(
+      multilingual_group,
+      levels = c(
+        "Monolingual",
+        "Bilingual",
+        "Trilingual",
+        "4+ languages"
+      )
+    )
+  )
+  
+
+
+# ============================================================
+# 3. STACKED LANGUAGE-COMBINATION GRAPH
+# ============================================================
+
+# Set explicit order for bars
+language_composition_summary <- language_composition_summary %>%
+  mutate(
+    multilingual_group = factor(
+      multilingual_group,
+      levels = c(
+        "Bilingual",
+        "Trilingual",
+        "4+ languages"
+      )
+    ),
+    
+    # Explicit order for slices AND legend
+    language_combination = factor(
+      language_combination,
+      levels = c(
+        # Bilingual
+        "English + French",
+        "French + Minority",
+        "English + Minority",
+        "Minority + Minority",
+        
+        # Trilingual
+        "English + French + Minority",
+        "French + 2 Minority",
+        "English + 2 Minority",
+        "3 Minority",
+        
+        # 4+
+        "4+ languages"
+      )
+    )
+  )
+
+
+ggplot(
+  language_composition_summary,
+  aes(
+    x = multilingual_group,
+    y = n,
+    fill = language_combination
+  )
+) +
+  
+  geom_col(
+    width = 0.7,
+    color = "white",
+    linewidth = 0.8
+  ) +
+  
+  # Percentage of entire sample above each bar
+  geom_text(
+    data = language_composition_summary %>%
+      distinct(
+        multilingual_group,
+        group_total,
+        group_percent
+      ),
+    aes(
+      x = multilingual_group,
+      y = group_total,
+      label = paste0(
+        round(group_percent, 1),
+        "%"
+      )
+    ),
+    inherit.aes = FALSE,
+    vjust = -0.5,
+    size = 20 / ggplot2::.pt
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      # -------------------------
+      # Bilingual combinations
+      # -------------------------
+      "English + French" = "#B0DA87",
+      "French + Minority" = "#8DAEE1",
+      "English + Minority" = "#FAE0BD",
+      "Minority + Minority" = "#C6A7D8",
+      
+      # -------------------------
+      # Trilingual combinations
+      # -------------------------
+      "English + French + Minority" = "#69B3A2",
+      "French + 2 Minority" = "#7896CC",
+      "English + 2 Minority" = "#F2B879",
+      "3 Minority" = "#9A77B5",
+      
+      # -------------------------
+      # 4+
+      # -------------------------
+      "4+ languages" = "#777777"
+    ),
+    
+    breaks = c(
+      "English + French",
+      "French + Minority",
+      "English + Minority",
+      "Minority + Minority",
+      "English + French + Minority",
+      "French + 2 Minority",
+      "English + 2 Minority",
+      "3 Minority",
+      "4+ languages"
+    ),
+    
+    name = "Language combination",
+    drop = TRUE
+  ) +
+  
+  labs(
+    x = NULL,
+    y = "Number of children"
+  ) +
+  
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12))
+  ) +
+  
+  theme_classic(base_size = 20) +
+  
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 20)
+  )
+
+
+#----------------------
+#MINORITY LANGUAGES
+#---------------------
+
+minority_language_summary <- model_data_long %>%
+  filter(
+    !is.na(language),
+    !language %in% c("French", "English")
+  ) %>%
+  distinct(internal_id, language) %>%
+  count(language, sort = TRUE, name = "n_children") %>%
+  mutate(
+    percent_sample = round(
+      n_children / n_distinct(model_data_long$internal_id) * 100,
+      1
+    )
+  )
+
+minority_language_summary
+
+
+top_minority_languages <- minority_language_summary %>%
+  filter(
+    language %in% c(
+      "Spanish",
+      "German",
+      "Portuguese",
+      "Italian"
+    )
+  ) %>%
+  mutate(
+    language = factor(
+      language,
+      levels = c(
+        "Italian",
+        "Portuguese",
+        "German",
+        "Spanish"
+      )
+    )
+  )
+
+
+ggplot(
+  top_minority_languages,
+  aes(
+    x = n_children,
+    y = language,
+    fill = language
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  
+  # Counts at end of bars
+  geom_text(
+    aes(
+      label = n_children
+    ),
+    hjust = -0.3,
+    size = 20 / ggplot2::.pt
+  ) +
+  
+  # Different color for each language
+  scale_fill_manual(
+    values = c(
+      "Spanish"    = "#B0DA87",
+      "German"     = "#FAE0BD",
+      "Portuguese" = "#8DAEE1",
+      "Italian"    = "#C6A7D8"
+    )
+  ) +
+  
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  
+  theme_classic(base_size = 20) +
+  
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20),
+    axis.title.x = element_text(size = 20)
+  )
+
+
+
+```
