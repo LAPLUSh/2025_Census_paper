@@ -739,67 +739,73 @@ data_clean_long<- data_clean_long %>%
 #pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
 #For the matrix at least run each concern and attitude separate.
 
-for_correlation <- clean_w_predictors %>%
-  select(child_age_years, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching, multilingual_rate)
+lang_agnostic_predictors <- clean_w_predictors %>%
+  select(internal_id, child_age_years, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, multilingual_rate)
 
 
-#making an average categorical active use measure for the language agnostic analyses
-for_correlation<- for_correlation %>%
+lang_agnostic_outcomes<- clean_w_predictors %>%
+  select(internal_id, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching)
+
+
+#making a binary measure of degree of activeness where all the languages must be at or above a score of 2 to receive 1, otherwise they receive 0.
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
   mutate(
-    child_active_use_mean = rowMeans(
-      across(
-        c(
-          child_french_active_use_category,
-          child_english_active_use_category,
-          child_first_min_active_use_category,
-          child_second_min_active_use_category,
-          child_third_min_active_use_category
-        )
-      ),
-      na.rm = TRUE
-    ),
-    child_active_use_mean = ifelse(
-      is.nan(child_active_use_mean),
-      NA_real_,
-      child_active_use_mean
+    degree_of_activeness_combined = as.integer(
+      if_all(
+        ends_with("_active_use_category"),
+        ~ is.na(.x) | .x >= 2
+      )
     )
-  )
-
-#making an average continuous active use measure for the language agnostic analyses
-for_correlation<- for_correlation %>%
+  ) %>%
+#making a binary measure of language matching where all the languages must be at or above a score of 20% to receive 1, otherwise they receive 0.
   mutate(
-    child_interlocutor_matching_mean = rowMeans(
-      across(
-        c(child_french_interlocutor_matching, 
-child_english_interlocutor_matching, 
-child_first_min_interlocutor_matching, 
-child_second_min_interlocutor_matching, 
-child_third_min_interlocutor_matching
-        )
-      ),
-      na.rm = TRUE
-    ),
-    child_interlocutor_matching_mean = ifelse(
-      is.nan(child_interlocutor_matching_mean),
-      NA_real_,
-      child_interlocutor_matching_mean
+    language_matching_combined = as.integer(
+      if_all(
+        ends_with("_interlocutor_matching"),
+        ~ is.na(.x) | .x >= 20
+      )
     )
-  )
+  ) 
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
+  select(internal_id, language_matching_combined, degree_of_activeness_combined)
+
+#combine the outcomes with the predictors
+ for_agnostic_correlation<- lang_agnostic_predictors %>%
+   left_join(lang_agnostic_outcomes, by="internal_id") %>%
+   select(-internal_id)
+   
 
 
-for_correlation <- for_correlation %>%
-  select(-child_french_active_use_category, -child_english_active_use_category, -child_first_min_active_use_category, -child_second_min_active_use_category, -child_third_min_active_use_category, -child_french_interlocutor_matching, -child_english_interlocutor_matching, -child_first_min_interlocutor_matching, -child_second_min_interlocutor_matching, -child_third_min_interlocutor_matching)
 
-for_correlation <- for_correlation %>%
+
+
+
+for_agnostic_correlation <- for_agnostic_correlation %>%
   mutate(across(everything(), as.numeric))
 
 
 
 language_agnostic_correlation <- cor(
- for_correlation,
+ for_agnostic_correlation,
   use = "pairwise.complete.obs",
-  method = "pearson"
+  method = "spearman"
 )
+ library(psych)
+
+language_agnostic_correlation<- psych::corr.test(
+  language_agnostic_correlation,
+  method = "spearman",
+  use = "pairwise",
+  adjust = "none"
+)
+
+
+# Significance at p < .05
+agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
+
+agnostic_significant_correlations
 
 
 corrplot(
@@ -813,27 +819,9 @@ corrplot(
 
 
 
-#Base model categories
-
-base_category<- lm(child_active_use_mean~ multilingual_rate + child_age_years, data= for_correlation )
-summary(base_category)
-
-#Beliefs categorical models
-cat_beleifs_model_1<- lm(child_active_use_mean~ multilingual_rate + child_age_years + beliefs_cognitive_benefits, data= for_correlation)
-cat_beleifs_model_2<- lm(child_active_use_mean~ multilingual_rate + child_age_years + beliefs_cognitive_benefits + beleifs_ahead_in_life, data= for_correlation)
-cat_beleifs_model_3<- lm(child_active_use_mean~ multilingual_rate + child_age_years + beliefs_cognitive_benefits + beleifs_ahead_in_life + beleifs_belonging, data= for_correlation)
+#logistic regressions 
 
 
-#worries categorical models
-
-cat_worries_model_1<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages, data= for_correlation)
-cat_worries_model_2<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + concern_cognitive_difficulties, data= for_correlation)
-cat_worries_model_3<- lm(child_active_use_mean~ multilingual_rate + child_age_years + worry_master_languages + concern_cognitive_difficulties + concern_school_difficulties, data= for_correlation)
-
-
-#Base model interlocutor
-base_interlocutor<- lm(child_interlocutor_matching_mean~ multilingual_rate + child_age_years, data= for_correlation )
-summary(base_interlocutor)
 
 
 
@@ -859,7 +847,7 @@ summary(base_interlocutor)
 
 
 for_correlation_long<- long_with_predictors %>%
-  select(internal_id, child_age_years,language, language_knowledge_rate, overall_exposure_english_child, overall_exposure_french_child, book_resources_english, book_resources_french, caregiver_english_book_reading, caregiver_french_book_reading, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, child_french_active_use_category, child_english_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching) 
+  select(internal_id, child_age_years,language, language_knowledge_rate, overall_exposure_english_child, overall_exposure_french_child, book_resources_english, book_resources_french, caregiver_english_book_reading, caregiver_french_book_reading,caregiver_sources_english, caregiver_sources_french, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, child_french_active_use_category, child_english_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching) 
 
 
 #building a separate matrix for French, English and minority languages
@@ -872,6 +860,7 @@ english_cor_data <- for_correlation_long %>%
     language_knowledge_rate,
     overall_exposure_english_child,
     book_resources_english,
+    caregiver_sources_english,
     caregiver_english_book_reading,
     child_english_interlocutor_matching
   )
@@ -905,6 +894,7 @@ french_cor_data <- for_correlation_long %>%
     language_knowledge_rate,
     overall_exposure_french_child,
     book_resources_french,
+     caregiver_sources_french,
     caregiver_french_book_reading,
     child_french_interlocutor_matching
   )
@@ -969,13 +959,19 @@ minority_long <- clean_w_predictors %>%
     minority_interlocutor_matching_second =
       child_second_min_interlocutor_matching,
     minority_interlocutor_matching_third =
-      child_third_min_interlocutor_matching
+      child_third_min_interlocutor_matching,
+    
+    #caregiver sources
+    minority_sources_first = caregiver_sources_first_minority,
+    minority_sources_second = caregiver_sources_second_minority,
+    minority_sources_third= caregiver_sources_third_minority
+    
   ) %>%
 
   # Turn first/second/third into rows
   pivot_longer(
     cols = matches(
-      "^minority_(language|overall_exposure|book_resources|book_reading|active_use|interlocutor_matching)_(first|second|third)$"
+      "^minority_(language|overall_exposure|book_resources|book_reading|sources|active_use|interlocutor_matching)_(first|second|third)$"
     ),
     names_to = c(".value", "minority_order"),
     names_pattern = "(.+)_(first|second|third)$"
@@ -1047,7 +1043,8 @@ minority_cor_data_matrix <- minority_cor_data %>%
     minority_overall_exposure,
     minority_book_resources,
     minority_book_reading,
-    minority_interlocutor_matching
+    minority_interlocutor_matching,
+    minority_sources
   )
 
 minority_cor_data_matrix <- minority_cor_data_matrix %>%
@@ -1073,11 +1070,7 @@ corrplot(
 
 
 
-#Matrix with English active use (both), French, Minority. Age, exposure per language, density of speaker per language, and multilingualism rate, attitudes, and concerns (one row each).
 
-#active use by language ~ age + language exposure + speaker rate (one set of models)
-
-#active use by language ~ age + language exposure + speaker rate + multilingualism rate (exploratory to see if adding the multilingualism rate soaks up more variance)
 
 
 
@@ -1210,6 +1203,13 @@ cor_plot_data <- cor_plot_data %>%
       predictor == "worry_cognitive_difficulties" ~ "Cognitive difficulties concern",
       predictor == "worry_school_difficulties" ~ "School difficulties concern",
       
+
+        predictor %in% c(
+        "caregiver_sources_english",
+        "caregiver_sources_french",
+        "minority_sources"
+      ) ~ "Number of sources",
+      
       TRUE ~ predictor
     )
   )
@@ -1221,12 +1221,13 @@ cor_plot_data <- cor_plot_data %>%
 
 #Order predictors nicely
 
-predictor_order <- c(
+predictor_order<- c(
   "Child age",
   "Speaker rate",
   "Access to books",
   "Overall exposure",
   "Book reading",
+ "Number of sources",
 "Status attitudes",
 "Solidarity attitudes",
 "Cognition attitudes",
@@ -1245,7 +1246,7 @@ cor_plot_data <- cor_plot_data %>%
 
 #Make bubble plot
 
-ggplot(
+correlation_bubble_plot<- ggplot(
   cor_plot_data,
   aes(
     x = language_group,
@@ -1292,6 +1293,22 @@ ggplot(
     legend.position = "right"
   )
 
+
+ggsave(
+  filename = here("Figures", "correlation_bubble_plot.png"),
+  plot = correlation_bubble_plot,
+  width = 10,
+  height = 7,
+  units = "in",
+  dpi = 600,
+  bg = "white"
+)
+
+
+
+
+
+
 ```
 
 ```{r hirarchical linear mixed effects models}
@@ -1323,14 +1340,16 @@ english_model_data <- long_with_predictors %>%
     speaker_rate = language_knowledge_rate,
     book_resources = book_resources_english,
     book_reading = caregiver_english_book_reading,
+    number_sources= caregiver_sources_english,
 
     # Child/family-level predictors
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = concern_master_languages,
-    cognitive_difficulties_worries = concern_cognitive_difficulties,
-    school_difficulties_worries = concern_school_difficulties
+     exposure_fluency_concern = worry_master_languages,
+    concern_cognitive_difficulties = worry_cognitive_difficulties,
+   concern_school_difficulties = worry_school_difficulties  
+    
   )
 
 
@@ -1356,14 +1375,15 @@ french_model_data <- long_with_predictors %>%
     speaker_rate = language_knowledge_rate,
     book_resources = book_resources_french,
     book_reading = caregiver_french_book_reading,
+     number_sources= caregiver_sources_french,
 
     # Child/family-level predictors
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = concern_master_languages,
-    cognitive_difficulties_worries = concern_cognitive_difficulties,
-    school_difficulties_worries = concern_school_difficulties
+     exposure_fluency_concern = worry_master_languages,
+    concern_cognitive_difficulties = worry_cognitive_difficulties,
+   concern_school_difficulties = worry_school_difficulties  
   )
 
 
@@ -1387,14 +1407,15 @@ minority_model_data <- minority_cor_data %>%
     speaker_rate = language_knowledge_rate,
     book_resources = minority_book_resources,
     book_reading = minority_book_reading,
+     number_sources= minority_sources,
 
     # Child/family-level predictors
     status_attitudes = beleifs_ahead_in_life,
     solidarity_attitudes = beleifs_belonging,
     cognition_attitudes = beliefs_cognitive_benefits,
-    exposure_fluency_worries = concern_master_languages,
-    cognitive_difficulties_worries = concern_cognitive_difficulties,
-    school_difficulties_worries = concern_school_difficulties
+     exposure_fluency_concern = worry_master_languages,
+    concern_cognitive_difficulties = worry_cognitive_difficulties,
+   concern_school_difficulties = worry_school_difficulties  
   )
 
 
@@ -1415,6 +1436,82 @@ model_data_long <- bind_rows(
   )
 
 
+
+# ------------------------------------------------------------
+# PLOT RELATIONSHIP BETWEEN OUTCOMES
+# ------------------------------------------------------------
+
+outcomes_plot_data <- model_data_long %>%
+  select(
+    internal_id,
+    language_type,
+    active_use,
+    interlocutor_matching
+  ) %>%
+  drop_na(
+    active_use,
+    interlocutor_matching
+  )
+
+outcomes_plot <- ggplot(
+  outcomes_plot_data,
+  aes(
+    x = active_use,
+    y = interlocutor_matching
+  )
+) +
+
+  # Individual observations
+  geom_jitter(
+    aes(color = language_type),
+    width = 0.12,
+    height = 1.5,
+    alpha = 0.45,
+    size = 2.5
+  ) +
+
+  # Linear relationship
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    color = "#333333",
+    linewidth = 1.2,
+    linetype = "dashed"
+  ) +
+
+  # Nonlinear relationship
+  geom_smooth(
+    method = "loess",
+    formula = y ~ x,
+    se = FALSE,
+    color = "#D66A65",
+    linewidth = 1.3
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "English" = "#B0DA87",
+      "French" = "#8DAEE1",
+      "Minority" = "#D5A0CF"
+    )
+  ) +
+
+  labs(
+    x = "Active language use",
+    y = "Interlocutor matching (%)",
+    color = "Language type"
+  ) +
+
+  theme_classic(base_size = 16) +
+
+  theme(
+    legend.position = "top",
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16)
+  )
+
+outcomes_plot
+
 # ============================================================
 # LINEAR MIXED-EFFECTS MODELS
 # One observation = child × language
@@ -1432,7 +1529,7 @@ model_data_long <- bind_rows(
 
 
 # ------------------------------------------------------------
-# 2. STANDARDIZE CONTINUOUS / ORDINAL PREDICTORS
+# 2. STANDARDIZE CONTINUOUS / ORDINAL PREDICTORS [Z transformed]
 #
 # Outcomes are NOT standardized.
 # language_type is categorical and is NOT standardized.
@@ -1447,12 +1544,13 @@ model_data_long <- model_data_long %>%
         speaker_rate,
         book_resources,
         book_reading,
+        number_sources,
         status_attitudes,
         solidarity_attitudes,
         cognition_attitudes,
-        exposure_fluency_worries,
-        cognitive_difficulties_worries,
-        school_difficulties_worries
+        exposure_fluency_concern,
+        concern_cognitive_difficulties,
+        concern_school_difficulties
       ),
       ~ as.numeric(scale(.x)),
       .names = "{.col}_z"
@@ -1468,12 +1566,13 @@ candidate_predictors <- c(
   "speaker_rate_z",
   "book_resources_z",
   "book_reading_z",
+   "number_sources_z",
   "status_attitudes_z",
   "solidarity_attitudes_z",
   "cognition_attitudes_z",
-  "exposure_fluency_worries_z",
-  "cognitive_difficulties_worries_z",
-  "school_difficulties_worries_z"
+  "exposure_fluency_concern_z",
+  "concern_cognitive_difficulties_z",
+  "concern_school_difficulties_z"
 )
 
 
@@ -1488,6 +1587,16 @@ active_base <- lmer(
     overall_exposure_z +
     child_age_years_z +
     language_type +
+    (1 | internal_id),
+  data = model_data_long,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+active_base_no_language_type <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
     (1 | internal_id),
   data = model_data_long,
   REML = FALSE,
@@ -1669,12 +1778,13 @@ predictor_labels <- c(
   "speaker_rate_z" = "Speaker rate",
   "book_resources_z" = "Book resources",
   "book_reading_z" = "Book reading",
+    "number_sources_z"="Number of sources",
   "status_attitudes_z" = "Status attitudes",
   "solidarity_attitudes_z" = "Solidarity attitudes",
   "cognition_attitudes_z" = "Cognition attitudes",
-  "exposure_fluency_worries_z" = "Exposure-fluency worries",
-  "cognitive_difficulties_worries_z" = "Cognitive difficulties worries",
-  "school_difficulties_worries_z" = "School difficulties worries"
+    "exposure_fluency_concern_z"= "Exposure-fluency concerns",
+  "concern_cognitive_difficulties_z"= "Cognitive difficulties concerns",
+  "concern_school_difficulties_z"= "School difficulties concerns"
 )
 
 
@@ -1697,7 +1807,7 @@ active_comparisons <- active_comparisons %>%
     BIC_added,
     delta_BIC,
     Chisq,
-    df,
+    # df,
     p
   )
 
@@ -2047,10 +2157,11 @@ active_remaining <- c(
   "speaker_rate_z",
   "book_resources_z",
   "cognition_attitudes_z",
-  "exposure_fluency_worries_z",
-  "cognitive_difficulties_worries_z",
-  "school_difficulties_worries_z",
-  "solidarity_attitudes_z"
+      "exposure_fluency_concern_z",
+  "concern_cognitive_difficulties_z",
+  "concern_school_difficulties_z",
+  "solidarity_attitudes_z",
+    "number_sources_z" 
 )
 
 
@@ -2093,9 +2204,10 @@ matching_remaining <- c(
   "book_resources_z",
   "cognition_attitudes_z",
   "solidarity_attitudes_z",
-  "exposure_fluency_worries_z",
-  "cognitive_difficulties_worries_z",
-  "school_difficulties_worries_z"
+  "exposure_fluency_concern_z",
+  "concern_cognitive_difficulties_z",
+  "concern_school_difficulties_z",
+    "number_sources_z" 
 )
 
 
@@ -2253,7 +2365,68 @@ performance::check_singularity(matching_final)
 performance::check_model(active_final)
 performance::check_model(matching_final)
 
-  
+
+
+
+
+# ============================================================
+# PUBLICATION-READY TABLE OF FINAL MIXED-EFFECTS MODELS
+# ============================================================
+
+models <- list(
+  "Active language use" = active_final,
+  "Interlocutor matching" = matching_final
+)
+
+# Rename coefficients for readability
+coef_names <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "language_typeFrench" = "Language: French (vs. English)",
+  "language_typeMinority" = "Language: Minority (vs. English)",
+  "book_reading_z" = "Book reading",
+  "speaker_rate_z" = "Community speaker rate",
+  "status_attitudes_z" = "Status attitudes"
+)
+library(modelsummary)
+library(flextable)
+# Create table
+model_table <- modelsummary(
+  models,
+
+  coef_map = coef_names,
+
+  # Estimate and standard error on first line;
+  # p-value on second line
+  estimate = "{estimate} ({std.error})",
+  statistic = "p = {p.value}",
+
+  fmt = 3,
+
+  # Display selected model information
+  gof_map = c(
+    "nobs",
+    "AIC",
+    "BIC"
+  ),
+
+  stars = FALSE,
+
+  output = "flextable"
+)
+
+# Apply Word-friendly formatting
+model_table <- model_table %>%
+  flextable::theme_booktabs() %>%
+  flextable::autofit() %>%
+  flextable::fontsize(size = 10, part = "all")
+
+model_table
+
+
+
+
   
 
 
@@ -2262,7 +2435,7 @@ performance::check_model(matching_final)
 
 
 
-```{r presentation descriptives}
+```{r methods descriptives}
 
 
 # ============================================================
