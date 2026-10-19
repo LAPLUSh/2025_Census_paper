@@ -1343,12 +1343,12 @@ english_model_data <- long_with_predictors %>%
     number_sources= caregiver_sources_english,
 
     # Child/family-level predictors
-    status_attitudes = beleifs_ahead_in_life,
-    solidarity_attitudes = beleifs_belonging,
-    cognition_attitudes = beliefs_cognitive_benefits,
-     exposure_fluency_concern = worry_master_languages,
-    concern_cognitive_difficulties = worry_cognitive_difficulties,
-   concern_school_difficulties = worry_school_difficulties  
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
     
   )
 
@@ -1378,12 +1378,12 @@ french_model_data <- long_with_predictors %>%
      number_sources= caregiver_sources_french,
 
     # Child/family-level predictors
-    status_attitudes = beleifs_ahead_in_life,
-    solidarity_attitudes = beleifs_belonging,
-    cognition_attitudes = beliefs_cognitive_benefits,
-     exposure_fluency_concern = worry_master_languages,
-    concern_cognitive_difficulties = worry_cognitive_difficulties,
-   concern_school_difficulties = worry_school_difficulties  
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
   )
 
 
@@ -1410,12 +1410,12 @@ minority_model_data <- minority_cor_data %>%
      number_sources= minority_sources,
 
     # Child/family-level predictors
-    status_attitudes = beleifs_ahead_in_life,
-    solidarity_attitudes = beleifs_belonging,
-    cognition_attitudes = beliefs_cognitive_benefits,
-     exposure_fluency_concern = worry_master_languages,
-    concern_cognitive_difficulties = worry_cognitive_difficulties,
-   concern_school_difficulties = worry_school_difficulties  
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
   )
 
 
@@ -1511,6 +1511,214 @@ outcomes_plot <- ggplot(
   )
 
 outcomes_plot
+# ============================================================
+# 1. Build base model for both outcomes
+
+#a. Standardize predictors
+
+
+model_data_long <- model_data_long %>%
+  mutate(
+    across(
+      c(
+        overall_exposure,
+        child_age_years,
+        speaker_rate,
+        book_resources,
+        book_reading,
+        number_sources,
+        # status_attitudes,
+        # solidarity_attitudes,
+        # cognition_attitudes,
+        # exposure_fluency_concern,
+        # concern_cognitive_difficulties,
+        # concern_school_difficulties
+      ),
+      ~ as.numeric(scale(.x)),
+      .names = "{.col}_z"
+    )
+  )
+
+#b. creating match databases so that the models are comparable 
+
+all_predictors <- c(
+  "overall_exposure_z",
+  "child_age_years_z",
+  "speaker_rate_z",
+  "book_resources_z",
+  "book_reading_z",
+  "number_sources_z"
+)
+
+
+# Dataset for active use
+active_data <- model_data_long %>%
+  drop_na(
+    internal_id,
+    active_use,
+    all_of(all_predictors)
+  )
+
+# Dataset for interlocutor matching
+matching_data <- model_data_long %>%
+  drop_na(
+    internal_id,
+    interlocutor_matching,
+    all_of(all_predictors)
+  )
+
+
+
+
+#c. build base models
+active_base <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+performance(active_base)
+
+matching_base <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+performance(matching_base)
+
+# ============================================================
+# 2. add societal layer predictors and compare to base model
+
+#a. Build the models
+active_societal <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(active_societal)
+#exposure and age are significant, societal factors are not
+
+performance(active_societal)
+
+matching_societal <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        speaker_rate_z +
+    book_resources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(matching_societal)
+#exposure, age and speaker rate is marginal
+
+#b. Do ANOVAS between base and societal level layers
+
+anova(active_base, active_societal) #no difference, better fit with base model
+
+anova(matching_base, matching_societal) #marginal difference, slightly better fit for the societal in AIC but not BIC
+
+# ============================================================
+# 2. build family layer predictor models and compare to base model
+
+active_family <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+summary(active_family)
+
+matching_family <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+
+
+# ============================================================
+# 3. add societal layer predictors and compare to base and single layer models
+
+#a. Build the models
+active_both_layers <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+summary(active_family)
+
+matching_both_layers <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        speaker_rate_z +
+    book_resources_z +
+        book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(matching_family)
+
+#anovas between base, societal, and family models
+
+anova(active_base, active_societal, active_family) #family significantly better than societal
+anova(matching_base, matching_societal, matching_family) #family marginally better than societal
+anova(matching_base, matching_family) #family significantly better than base
+anova(matching_family, matching_both_layers)
+
+
+#societal layer predictors in the language specific analyses are no longer significant.
+
+
+# ============================================================
+#4. Explore relationships visually , especially with language type
+
+
+# ============================================================
+#5. Build exploratory models with interactions
 
 # ============================================================
 # LINEAR MIXED-EFFECTS MODELS
@@ -1535,27 +1743,6 @@ outcomes_plot
 # language_type is categorical and is NOT standardized.
 # ------------------------------------------------------------
 
-model_data_long <- model_data_long %>%
-  mutate(
-    across(
-      c(
-        overall_exposure,
-        child_age_years,
-        speaker_rate,
-        book_resources,
-        book_reading,
-        number_sources,
-        status_attitudes,
-        solidarity_attitudes,
-        cognition_attitudes,
-        exposure_fluency_concern,
-        concern_cognitive_difficulties,
-        concern_school_difficulties
-      ),
-      ~ as.numeric(scale(.x)),
-      .names = "{.col}_z"
-    )
-  )
 
 
 # ------------------------------------------------------------
@@ -1593,27 +1780,7 @@ active_base <- lmer(
   na.action = na.omit
 )
 
-active_base_no_language_type <- lmer(
-  active_use ~
-    overall_exposure_z +
-    child_age_years_z +
-    (1 | internal_id),
-  data = model_data_long,
-  REML = FALSE,
-  na.action = na.omit
-)
 
-
-matching_base <- lmer(
-  interlocutor_matching ~
-    overall_exposure_z +
-    child_age_years_z +
-    language_type +
-    (1 | internal_id),
-  data = model_data_long,
-  REML = FALSE,
-  na.action = na.omit
-)
 
 
 # Inspect base models
