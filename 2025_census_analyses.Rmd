@@ -733,116 +733,6 @@ data_clean_long<- data_clean_long %>%
 ```
 
 
-
-```{r statistical analyses language agnostic}
-
-#pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
-#For the matrix at least run each concern and attitude separate.
-
-lang_agnostic_predictors <- clean_w_predictors %>%
-  select(internal_id, child_age_years, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, multilingual_rate)
-
-
-lang_agnostic_outcomes<- clean_w_predictors %>%
-  select(internal_id, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching)
-
-
-#making a binary measure of degree of activeness where all the languages must be at or above a score of 2 to receive 1, otherwise they receive 0.
-
-lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
-  mutate(
-    degree_of_activeness_combined = as.integer(
-      if_all(
-        ends_with("_active_use_category"),
-        ~ is.na(.x) | .x >= 2
-      )
-    )
-  ) %>%
-#making a binary measure of language matching where all the languages must be at or above a score of 20% to receive 1, otherwise they receive 0.
-  mutate(
-    language_matching_combined = as.integer(
-      if_all(
-        ends_with("_interlocutor_matching"),
-        ~ is.na(.x) | .x >= 20
-      )
-    )
-  ) 
-
-lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
-  select(internal_id, language_matching_combined, degree_of_activeness_combined)
-
-#combine the outcomes with the predictors
- for_agnostic_correlation<- lang_agnostic_predictors %>%
-   left_join(lang_agnostic_outcomes, by="internal_id") %>%
-   select(-internal_id)
-   
-
-
-
-
-
-
-for_agnostic_correlation <- for_agnostic_correlation %>%
-  mutate(across(everything(), as.numeric))
-
-
-
-language_agnostic_correlation <- cor(
- for_agnostic_correlation,
-  use = "pairwise.complete.obs",
-  method = "spearman"
-)
- library(psych)
-
-language_agnostic_correlation<- psych::corr.test(
-  language_agnostic_correlation,
-  method = "spearman",
-  use = "pairwise",
-  adjust = "none"
-)
-
-
-# Significance at p < .05
-agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
-
-agnostic_significant_correlations
-
-
-corrplot(
-  language_agnostic_correlation,
-  method = "circle",
-  type = "upper",
-  diag = TRUE,
-  tl.col = "black",
-  tl.srt = 45,
-)
-
-
-
-#logistic regressions 
-
-
-
-
-
-
-
-#run the aoa as a factor in an exploratory fashion
-
-#attitudes model 
-#active_use~child_age+multiliningualism_rate+attitudes+concerns
-
-#Anova between base and attidues models.
-
-
-#Viz: active use y axis, multilingualism rate. confidence interval. Run it smooth too to check if it's linear, with the data points also.
-#histograms, and diagnostic plots.
-
-
-```
-
-
-
 ```{r statistical analyses language specific}
 
 
@@ -1709,8 +1599,261 @@ anova(matching_base, matching_societal, matching_family) #family marginally bett
 anova(matching_base, matching_family) #family significantly better than base
 anova(matching_family, matching_both_layers)
 
+# ============================================================
+#Let's make a publication ready table of the active use results
 
-#societal layer predictors in the language specific analyses are no longer significant.
+
+library(modelsummary)
+library(flextable)
+library(performance)
+
+# Models in the desired order
+models_active <- list(
+  "Societal" = active_societal,
+  "Family" = active_family,
+  "Both layers" = active_both_layers
+)
+
+# Rename predictors for publication
+coef_names <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "speaker_rate_z" = "Speaker rate",
+  "book_resources_z" = "Book resources",
+  "book_reading_z" = "Book reading",
+  "number_sources_z" = "Number of language sources"
+)
+
+
+
+gof_active <- data.frame(
+  raw = c(
+    "nobs",
+    "r2.marginal",
+    "r2.conditional",
+    "aic",
+    "bic",
+    "rmse"
+  ),
+  clean = c(
+    "Observations",
+    "Marginal R²",
+    "Conditional R²",
+    "AIC",
+    "BIC",
+    "RMSE"
+  ),
+  fmt = c(0, 3, 3, 1, 1, 3)
+)
+
+
+# Extract random-intercept SD
+get_intercept_sd <- function(model) {
+  as.numeric(
+    attr(VarCorr(model)$internal_id, "stddev")[1]
+  )
+}
+
+# Extract residual SD
+get_residual_sd <- function(model) {
+  sigma(model)
+}
+
+# Create rows for the table
+sd_rows <- data.frame(
+  term = c(
+    "SD (Random intercept: Child)",
+    "SD (Residuals)"
+  ),
+  Societal = c(
+    get_intercept_sd(active_societal),
+    get_residual_sd(active_societal)
+  ),
+  Family = c(
+    get_intercept_sd(active_family),
+    get_residual_sd(active_family)
+  ),
+  `Both layers` = c(
+    get_intercept_sd(active_both_layers),
+    get_residual_sd(active_both_layers)
+  ),
+  check.names = FALSE
+)
+
+# Format to 3 decimal places
+sd_rows[-1] <- lapply(
+  sd_rows[-1],
+  function(x) sprintf("%.3f", x)
+)
+
+# Place these rows after the coefficients
+attr(sd_rows, "position") <- "gof_start"
+
+
+
+# Generate publication-ready table
+
+table_active <- modelsummary(
+  models_active,
+  coef_map = coef_names,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_active,
+  add_rows = sd_rows,
+  output = "flextable"
+)
+
+table_active <- table_active |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_active
+
+
+
+save_as_docx(
+  "Table 1. Linear mixed-effects models predicting active language use" =
+    table_active,
+  path = "active_use_models.docx"
+)
+
+# ============================================================
+#Let's make a publication ready table of the matching results
+
+
+# Models in the desired order
+models_matching <- list(
+  "Societal" = matching_societal,
+  "Family" = matching_family,
+  "Both layers" = matching_both_layers
+)
+
+# Rename predictors for publication
+coef_names <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "speaker_rate_z" = "Speaker rate",
+  "book_resources_z" = "Book resources",
+  "book_reading_z" = "Book reading",
+  "number_sources_z" = "Number of language sources"
+)
+
+
+
+gof_matching <- data.frame(
+  raw = c(
+    "nobs",
+    "r2.marginal",
+    "r2.conditional",
+    "aic",
+    "bic",
+    "rmse"
+  ),
+  clean = c(
+    "Observations",
+    "Marginal R²",
+    "Conditional R²",
+    "AIC",
+    "BIC",
+    "RMSE"
+  ),
+  fmt = c(0, 3, 3, 1, 1, 3)
+)
+
+
+# Extract random-intercept SD
+get_intercept_sd <- function(model) {
+  as.numeric(
+    attr(VarCorr(model)$internal_id, "stddev")[1]
+  )
+}
+
+# Extract residual SD
+get_residual_sd <- function(model) {
+  sigma(model)
+}
+
+# Create rows for the table
+sd_rows <- data.frame(
+  term = c(
+    "SD (Random intercept: Child)",
+    "SD (Residuals)"
+  ),
+  Societal = c(
+    get_intercept_sd(matching_societal),
+    get_residual_sd(matching_societal)
+  ),
+  Family = c(
+    get_intercept_sd(matching_family),
+    get_residual_sd(matching_family)
+  ),
+  `Both layers` = c(
+    get_intercept_sd(matching_both_layers),
+    get_residual_sd(matching_both_layers)
+  ),
+  check.names = FALSE
+)
+
+# Format to 3 decimal places
+sd_rows[-1] <- lapply(
+  sd_rows[-1],
+  function(x) sprintf("%.3f", x)
+)
+
+# Place these rows after the coefficients
+attr(sd_rows, "position") <- "gof_start"
+
+
+
+# Generate publication-ready table
+
+table_matching <- modelsummary(
+  models_matching,
+  coef_map = coef_names,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_matching,
+  add_rows = sd_rows,
+  output = "flextable"
+)
+
+table_matching <- table_matching |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_matching
+
+
+save_as_docx(
+  "Table 2. Linear mixed-effects models predicting language matching" =
+    table_matching,
+  path = "language_matching_models.docx"
+)
+
+
+
 
 
 # ============================================================
@@ -1721,875 +1864,10 @@ anova(matching_family, matching_both_layers)
 #5. Build exploratory models with interactions
 
 # ============================================================
-# LINEAR MIXED-EFFECTS MODELS
-# One observation = child × language
-#
-# Outcomes:
-#   1. Active language use
-#   2. Interlocutor matching
-#
-# Base model:
-#   outcome ~ exposure + age + language_type + (1 | internal_id)
-#
-# Candidate predictors are added ONE AT A TIME and compared
-# against the base model using the SAME observations.
-# ============================================================
 
 
-# ------------------------------------------------------------
-# 2. STANDARDIZE CONTINUOUS / ORDINAL PREDICTORS [Z transformed]
-#
-# Outcomes are NOT standardized.
-# language_type is categorical and is NOT standardized.
-# ------------------------------------------------------------
 
 
-
-# ------------------------------------------------------------
-# 3. DEFINE ADDITIONAL PREDICTORS
-# ------------------------------------------------------------
-
-candidate_predictors <- c(
-  "speaker_rate_z",
-  "book_resources_z",
-  "book_reading_z",
-   "number_sources_z",
-  "status_attitudes_z",
-  "solidarity_attitudes_z",
-  "cognition_attitudes_z",
-  "exposure_fluency_concern_z",
-  "concern_cognitive_difficulties_z",
-  "concern_school_difficulties_z"
-)
-
-
-# ------------------------------------------------------------
-# 4. FIT BASE MODELS
-#
-# REML = FALSE because we will compare fixed-effect structures.
-# ------------------------------------------------------------
-
-active_base <- lmer(
-  active_use ~
-    overall_exposure_z +
-    child_age_years_z +
-    language_type +
-    (1 | internal_id),
-  data = model_data_long,
-  REML = FALSE,
-  na.action = na.omit
-)
-
-
-
-
-# Inspect base models
-summary(active_base)
-summary(matching_base)
-
-
-# ------------------------------------------------------------
-# 5. CHECK RANDOM EFFECT / MODEL DIAGNOSTICS
-# ------------------------------------------------------------
-
-performance::icc(active_base)
-performance::icc(matching_base)
-
-performance::r2(active_base)
-performance::r2(matching_base)
-
-performance::check_singularity(active_base)
-performance::check_singularity(matching_base)
-
-
-# ------------------------------------------------------------
-# 6. FUNCTION:
-# TEST EACH ADDITIONAL PREDICTOR AGAINST BASE MODEL
-#
-# IMPORTANT:
-# A separate matched dataset is created for every comparison.
-# Therefore base and expanded models always contain exactly
-# the same observations.
-# ------------------------------------------------------------
-
-test_predictors <- function(outcome, data) {
-
-  map_dfr(
-    candidate_predictors,
-
-    function(pred) {
-
-      # Variables required for this comparison
-      required_vars <- c(
-        outcome,
-        "overall_exposure_z",
-        "child_age_years_z",
-        "language_type",
-        pred,
-        "internal_id"
-      )
-
-
-      # Matched sample for base and expanded model
-      comparison_data <- data %>%
-        drop_na(all_of(required_vars))
-
-
-      # -------------------------
-      # BASE MODEL
-      # -------------------------
-
-      base_formula <- as.formula(
-        paste0(
-          outcome,
-          " ~ overall_exposure_z + ",
-          "child_age_years_z + ",
-          "language_type + ",
-          "(1 | internal_id)"
-        )
-      )
-
-      base_model <- lmer(
-        base_formula,
-        data = comparison_data,
-        REML = FALSE
-      )
-
-
-      # -------------------------
-      # EXPANDED MODEL
-      # -------------------------
-
-      expanded_formula <- as.formula(
-        paste0(
-          outcome,
-          " ~ overall_exposure_z + ",
-          "child_age_years_z + ",
-          "language_type + ",
-          pred,
-          " + (1 | internal_id)"
-        )
-      )
-
-      expanded_model <- lmer(
-        expanded_formula,
-        data = comparison_data,
-        REML = FALSE
-      )
-
-
-      # -------------------------
-      # LIKELIHOOD-RATIO TEST
-      # -------------------------
-
-      comparison <- anova(
-        base_model,
-        expanded_model
-      )
-
-
-      # -------------------------
-      # RETURN RESULTS
-      # -------------------------
-
-      tibble(
-        predictor = pred,
-
-        n_observations = nrow(comparison_data),
-        n_children = n_distinct(comparison_data$internal_id),
-
-        AIC_base = AIC(base_model),
-        AIC_added = AIC(expanded_model),
-        delta_AIC = AIC(expanded_model) - AIC(base_model),
-
-        BIC_base = BIC(base_model),
-        BIC_added = BIC(expanded_model),
-        delta_BIC = BIC(expanded_model) - BIC(base_model),
-
-        Chisq = comparison$Chisq[2],
-        df = comparison$`Chi Df`[2],
-        p = comparison$`Pr(>Chisq)`[2]
-      )
-    }
-  )
-}
-
-
-# ------------------------------------------------------------
-# 7. RUN ACTIVE-USE MODEL COMPARISONS
-# ------------------------------------------------------------
-
-library(purrr)
-
-active_comparisons <- test_predictors(
-  outcome = "active_use",
-  data = model_data_long
-)
-
-
-# ------------------------------------------------------------
-# 8. RUN INTERLOCUTOR-MATCHING MODEL COMPARISONS
-# ------------------------------------------------------------
-
-matching_comparisons <- test_predictors(
-  outcome = "interlocutor_matching",
-  data = model_data_long
-)
-
-
-# ------------------------------------------------------------
-# 9. CLEAN PREDICTOR LABELS
-# ------------------------------------------------------------
-
-predictor_labels <- c(
-  "speaker_rate_z" = "Speaker rate",
-  "book_resources_z" = "Book resources",
-  "book_reading_z" = "Book reading",
-    "number_sources_z"="Number of sources",
-  "status_attitudes_z" = "Status attitudes",
-  "solidarity_attitudes_z" = "Solidarity attitudes",
-  "cognition_attitudes_z" = "Cognition attitudes",
-    "exposure_fluency_concern_z"= "Exposure-fluency concerns",
-  "concern_cognitive_difficulties_z"= "Cognitive difficulties concerns",
-  "concern_school_difficulties_z"= "School difficulties concerns"
-)
-
-
-active_comparisons <- active_comparisons %>%
-  mutate(
-    predictor_label = recode(
-      predictor,
-      !!!predictor_labels
-    )
-  ) %>%
-  arrange(delta_AIC) %>%
-  select(
-    predictor_label,
-    n_observations,
-    n_children,
-    AIC_base,
-    AIC_added,
-    delta_AIC,
-    BIC_base,
-    BIC_added,
-    delta_BIC,
-    Chisq,
-    # df,
-    p
-  )
-
-
-matching_comparisons <- matching_comparisons %>%
-  mutate(
-    predictor_label = recode(
-      predictor,
-      !!!predictor_labels
-    )
-  ) %>%
-  arrange(delta_AIC) %>%
-  select(
-    predictor_label,
-    n_observations,
-    n_children,
-    AIC_base,
-    AIC_added,
-    delta_AIC,
-    BIC_base,
-    BIC_added,
-    delta_BIC,
-    Chisq,
-    p
-  )
-
-
-# ------------------------------------------------------------
-# 10. VIEW MODEL-COMPARISON TABLES
-# ------------------------------------------------------------
-
-active_comparisons
-
-matching_comparisons
-
-# ============================================================
-# HIERARCHICAL MODEL BUILDING
-#
-# Base:
-# outcome ~ exposure + age + language_type + (1 | internal_id)
-#
-# At each step:
-# - Add one predictor
-# - Fit previous and expanded model to SAME observations
-# - Compare with likelihood-ratio test, AIC and BIC
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 1. FUNCTION FOR ONE HIERARCHICAL STEP
-# ------------------------------------------------------------
-
-compare_hierarchical_step <- function(
-    outcome,
-    current_predictors,
-    new_predictor,
-    data) {
-  
-  # All variables needed for BOTH models
-  required_vars <- c(
-    outcome,
-    current_predictors,
-    new_predictor,
-    "internal_id"
-  )
-  
-  comparison_data <- data %>%
-    drop_na(all_of(required_vars))
-  
-  
-  # Previous model
-  old_formula <- as.formula(
-    paste0(
-      outcome,
-      " ~ ",
-      paste(current_predictors, collapse = " + "),
-      " + (1 | internal_id)"
-    )
-  )
-  
-  
-  # Model with new predictor
-  new_formula <- as.formula(
-    paste0(
-      outcome,
-      " ~ ",
-      paste(c(current_predictors, new_predictor),
-            collapse = " + "),
-      " + (1 | internal_id)"
-    )
-  )
-  
-  
-  old_model <- lmer(
-    old_formula,
-    data = comparison_data,
-    REML = FALSE
-  )
-  
-  new_model <- lmer(
-    new_formula,
-    data = comparison_data,
-    REML = FALSE
-  )
-  
-  
-  comparison <- anova(
-    old_model,
-    new_model
-  )
-  
-  
-  tibble(
-    added_predictor = new_predictor,
-    
-    n_observations = nrow(comparison_data),
-    n_children = n_distinct(comparison_data$internal_id),
-    
-    AIC_previous = AIC(old_model),
-    AIC_new = AIC(new_model),
-    delta_AIC = AIC(new_model) - AIC(old_model),
-    
-    BIC_previous = BIC(old_model),
-    BIC_new = BIC(new_model),
-    delta_BIC = BIC(new_model) - BIC(old_model),
-    
-    Chisq = comparison$Chisq[2],
-    p = comparison$`Pr(>Chisq)`[2]
-  )
-}
-
-
-
-# ============================================================
-# 2. ACTIVE LANGUAGE USE
-# ============================================================
-
-# Base predictors that are always retained
-active_base_predictors <- c(
-  "overall_exposure_z",
-  "child_age_years_z",
-  "language_type"
-)
-
-
-# ------------------------------------------------------------
-# Step 1: Add BOOK READING
-# ------------------------------------------------------------
-
-active_step1 <- compare_hierarchical_step(
-  outcome = "active_use",
-  current_predictors = active_base_predictors,
-  new_predictor = "book_reading_z",
-  data = model_data_long
-)
-
-active_step1
-
-
-# ------------------------------------------------------------
-# Step 2: Add STATUS ATTITUDES
-# ------------------------------------------------------------
-
-active_step2 <- compare_hierarchical_step(
-  outcome = "active_use",
-  current_predictors = c(
-    active_base_predictors,
-    "book_reading_z"
-  ),
-  new_predictor = "status_attitudes_z",
-  data = model_data_long
-)
-
-active_step2
-
-
-# ------------------------------------------------------------
-# Step 3: Add COGNITION ATTITUDES
-# ------------------------------------------------------------
-
-active_step3 <- compare_hierarchical_step(
-  outcome = "active_use",
-  current_predictors = c(
-    active_base_predictors,
-    "book_reading_z",
-    "status_attitudes_z"
-  ),
-  new_predictor = "cognition_attitudes_z",
-  data = model_data_long
-)
-
-active_step3
-
-
-# ------------------------------------------------------------
-# Step 4: Add BOOK RESOURCES
-# ------------------------------------------------------------
-
-active_step4 <- compare_hierarchical_step(
-  outcome = "active_use",
-  current_predictors = c(
-    active_base_predictors,
-    "book_reading_z",
-    "status_attitudes_z",
-    "cognition_attitudes_z"
-  ),
-  new_predictor = "book_resources_z",
-  data = model_data_long
-)
-
-active_step4
-
-
-# ------------------------------------------------------------
-# Step 5: Add SPEAKER RATE
-# ------------------------------------------------------------
-
-active_step5 <- compare_hierarchical_step(
-  outcome = "active_use",
-  current_predictors = c(
-    active_base_predictors,
-    "book_reading_z",
-    "status_attitudes_z",
-    "cognition_attitudes_z",
-    "book_resources_z"
-  ),
-  new_predictor = "speaker_rate_z",
-  data = model_data_long
-)
-
-active_step5
-
-
-
-# ============================================================
-# 3. COMBINE ACTIVE-USE RESULTS
-# ============================================================
-
-active_hierarchy <- bind_rows(
-  active_step1,
-  active_step2,
-  active_step3,
-  active_step4,
-  active_step5
-)
-
-active_hierarchy
-
-
-
-# ============================================================
-# 4. INTERLOCUTOR MATCHING
-# ============================================================
-
-matching_base_predictors <- c(
-  "overall_exposure_z",
-  "child_age_years_z",
-  "language_type"
-)
-
-
-# ------------------------------------------------------------
-# Step 1: Add BOOK READING
-# ------------------------------------------------------------
-
-matching_step1 <- compare_hierarchical_step(
-  outcome = "interlocutor_matching",
-  current_predictors = matching_base_predictors,
-  new_predictor = "book_reading_z",
-  data = model_data_long
-)
-
-matching_step1
-
-
-# ------------------------------------------------------------
-# Step 2: Add SPEAKER RATE
-# ------------------------------------------------------------
-
-matching_step2 <- compare_hierarchical_step(
-  outcome = "interlocutor_matching",
-  current_predictors = c(
-    matching_base_predictors,
-    "book_reading_z"
-  ),
-  new_predictor = "speaker_rate_z",
-  data = model_data_long
-)
-
-matching_step2
-
-
-# ------------------------------------------------------------
-# Step 3: Add STATUS ATTITUDES
-# ------------------------------------------------------------
-
-matching_step3 <- compare_hierarchical_step(
-  outcome = "interlocutor_matching",
-  current_predictors = c(
-    matching_base_predictors,
-    "book_reading_z",
-    "speaker_rate_z"
-  ),
-  new_predictor = "status_attitudes_z",
-  data = model_data_long
-)
-
-matching_step3
-
-
-
-# ============================================================
-# 5. COMBINE INTERLOCUTOR-MATCHING RESULTS
-# ============================================================
-
-matching_hierarchy <- bind_rows(
-  matching_step1,
-  matching_step2,
-  matching_step3
-)
-
-matching_hierarchy
-
-
-
-
-# ============================================================
-# FINAL ACTIVE-USE CANDIDATE TESTS
-#
-# Supported core:
-# exposure + age + language type
-# + book reading
-# + status attitudes
-# ============================================================
-
-active_supported_predictors <- c(
-  "overall_exposure_z",
-  "child_age_years_z",
-  "language_type",
-  "book_reading_z",
-  "status_attitudes_z"
-)
-
-
-# Remaining predictors to test against supported core
-active_remaining <- c(
-  "speaker_rate_z",
-  "book_resources_z",
-  "cognition_attitudes_z",
-      "exposure_fluency_concern_z",
-  "concern_cognitive_difficulties_z",
-  "concern_school_difficulties_z",
-  "solidarity_attitudes_z",
-    "number_sources_z" 
-)
-
-
-active_final_tests <- purrr::map_dfr(
-  active_remaining,
-  function(pred) {
-    
-    compare_hierarchical_step(
-      outcome = "active_use",
-      current_predictors = active_supported_predictors,
-      new_predictor = pred,
-      data = model_data_long
-    )
-    
-  }
-) %>%
-  arrange(delta_AIC)
-
-# ============================================================
-# FINAL INTERLOCUTOR-MATCHING CANDIDATE TESTS
-#
-# Supported core:
-# exposure + age + language type
-# + book reading
-# + speaker rate
-# + status attitudes
-# ============================================================
-
-matching_supported_predictors <- c(
-  "overall_exposure_z",
-  "child_age_years_z",
-  "language_type",
-  "book_reading_z",
-  "speaker_rate_z",
-  "status_attitudes_z"
-)
-
-
-matching_remaining <- c(
-  "book_resources_z",
-  "cognition_attitudes_z",
-  "solidarity_attitudes_z",
-  "exposure_fluency_concern_z",
-  "concern_cognitive_difficulties_z",
-  "concern_school_difficulties_z",
-    "number_sources_z" 
-)
-
-
-matching_final_tests <- purrr::map_dfr(
-  matching_remaining,
-  function(pred) {
-    
-    compare_hierarchical_step(
-      outcome = "interlocutor_matching",
-      current_predictors = matching_supported_predictors,
-      new_predictor = pred,
-      data = model_data_long
-    )
-    
-  }
-) %>%
-  arrange(delta_AIC)
-
-
-  # ============================================================
-# FINAL MIXED-EFFECTS MODELS
-# ============================================================
-
-
-
-# ============================================================
-# 1. ACTIVE LANGUAGE USE
-#
-# Final fixed effects:
-# Exposure + Age + Language type
-# + Book reading + Status attitudes
-# ============================================================
-
-active_final_data <- model_data_long %>%
-  drop_na(
-    active_use,
-    overall_exposure_z,
-    child_age_years_z,
-    language_type,
-    book_reading_z,
-    status_attitudes_z,
-    internal_id
-  )
-
-
-active_final <- lmer(
-  active_use ~
-    overall_exposure_z +
-    child_age_years_z +
-    language_type +
-    book_reading_z +
-    status_attitudes_z +
-    (1 | internal_id),
-  data = active_final_data,
-  REML = TRUE
-)
-
-
-# Model results
-summary(active_final)
-
-
-# ============================================================
-# 2. INTERLOCUTOR MATCHING
-#
-# Final fixed effects:
-# Exposure + Age + Language type
-# + Book reading + Speaker rate + Status attitudes
-# ============================================================
-
-matching_final_data <- model_data_long %>%
-  drop_na(
-    interlocutor_matching,
-    overall_exposure_z,
-    child_age_years_z,
-    language_type,
-    book_reading_z,
-    speaker_rate_z,
-    status_attitudes_z,
-    internal_id
-  )
-
-
-matching_final <- lmer(
-  interlocutor_matching ~
-    overall_exposure_z +
-    child_age_years_z +
-    language_type +
-    book_reading_z +
-    speaker_rate_z +
-    status_attitudes_z +
-    (1 | internal_id),
-  data = matching_final_data,
-  REML = TRUE
-)
-
-
-# Model results
-summary(matching_final)
-
-
-# ============================================================
-# 3. SAMPLE SIZES
-# ============================================================
-
-tibble(
-  Outcome = c(
-    "Active language use",
-    "Interlocutor matching"
-  ),
-  
-  Observations = c(
-    nrow(active_final_data),
-    nrow(matching_final_data)
-  ),
-  
-  Children = c(
-    n_distinct(active_final_data$internal_id),
-    n_distinct(matching_final_data$internal_id)
-  )
-)
-
-
-# ============================================================
-# 4. OVERALL VARIANCE EXPLAINED
-# ============================================================
-
-# Marginal R2 = fixed effects
-# Conditional R2 = fixed + random effects
-
-performance::r2(active_final)
-
-performance::r2(matching_final)
-
-
-# ============================================================
-# 5. ICC
-#
-# Proportion of residual variance attributable to
-# differences between children
-# ============================================================
-
-performance::icc(active_final)
-
-performance::icc(matching_final)
-
-
-# ============================================================
-# 6. MODEL DIAGNOSTICS
-# ============================================================
-
-performance::check_singularity(active_final)
-performance::check_singularity(matching_final)
-
-performance::check_model(active_final)
-performance::check_model(matching_final)
-
-
-
-
-
-# ============================================================
-# PUBLICATION-READY TABLE OF FINAL MIXED-EFFECTS MODELS
-# ============================================================
-
-models <- list(
-  "Active language use" = active_final,
-  "Interlocutor matching" = matching_final
-)
-
-# Rename coefficients for readability
-coef_names <- c(
-  "(Intercept)" = "Intercept",
-  "overall_exposure_z" = "Overall language exposure",
-  "child_age_years_z" = "Child age",
-  "language_typeFrench" = "Language: French (vs. English)",
-  "language_typeMinority" = "Language: Minority (vs. English)",
-  "book_reading_z" = "Book reading",
-  "speaker_rate_z" = "Community speaker rate",
-  "status_attitudes_z" = "Status attitudes"
-)
-library(modelsummary)
-library(flextable)
-# Create table
-model_table <- modelsummary(
-  models,
-
-  coef_map = coef_names,
-
-  # Estimate and standard error on first line;
-  # p-value on second line
-  estimate = "{estimate} ({std.error})",
-  statistic = "p = {p.value}",
-
-  fmt = 3,
-
-  # Display selected model information
-  gof_map = c(
-    "nobs",
-    "AIC",
-    "BIC"
-  ),
-
-  stars = FALSE,
-
-  output = "flextable"
-)
-
-# Apply Word-friendly formatting
-model_table <- model_table %>%
-  flextable::theme_booktabs() %>%
-  flextable::autofit() %>%
-  flextable::fontsize(size = 10, part = "all")
-
-model_table
 
 
 
@@ -2599,6 +1877,470 @@ model_table
 
 ```
 
+```{r statistical analyses language agnostic}
+
+#pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
+#For the matrix at least run each concern and attitude separate.
+
+lang_agnostic_predictors <- clean_w_predictors %>%
+  select(internal_id, child_age_years, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, multilingual_rate)
+
+
+lang_agnostic_outcomes<- clean_w_predictors %>%
+  select(internal_id, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching)
+
+
+#making a binary measure of degree of activeness where all the languages must be at or above a score of 2 to receive 1, otherwise they receive 0.
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
+  mutate(
+    degree_of_activeness_combined = as.integer(
+      if_all(
+        ends_with("_active_use_category"),
+        ~ is.na(.x) | .x >= 2
+      )
+    )
+  ) %>%
+#making a binary measure of language matching where all the languages must be at or above a score of 50% to receive 1, otherwise they receive 0.
+  mutate(
+    language_matching_combined = as.integer(
+      if_all(
+        ends_with("_interlocutor_matching"),
+        ~ is.na(.x) | .x >= 50
+      )
+    )
+  ) 
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
+  select(internal_id, language_matching_combined, degree_of_activeness_combined)
+
+#combine the outcomes with the predictors for the correlations
+ for_agnostic_correlation<- lang_agnostic_predictors %>%
+   left_join(lang_agnostic_outcomes, by="internal_id") %>%
+   select(-internal_id)
+   
+
+  for_agnostic_models <- lang_agnostic_predictors %>%
+   left_join(lang_agnostic_outcomes, by="internal_id") 
+
+
+for_agnostic_correlation <- for_agnostic_correlation %>%
+  mutate(across(everything(), as.numeric))
+
+
+
+language_agnostic_correlation <- cor(
+ for_agnostic_correlation,
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
+ library(psych)
+
+language_agnostic_correlation<- psych::corr.test(
+  language_agnostic_correlation,
+  method = "spearman",
+  use = "pairwise",
+  adjust = "none"
+)
+
+
+# Significance at p < .05
+agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
+
+agnostic_significant_correlations
+
+
+corrplot(
+  language_agnostic_correlation,
+  method = "circle",
+  type = "upper",
+  diag = TRUE,
+  tl.col = "black",
+  tl.srt = 45,
+)
+
+
+#=====================================================
+#logistic regressions 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#run the aoa as a factor in an exploratory fashion
+
+#attitudes model 
+#active_use~child_age+multiliningualism_rate+attitudes+concerns
+
+#Anova between base and attidues models.
+
+
+#Viz: active use y axis, multilingualism rate. confidence interval. Run it smooth too to check if it's linear, with the data points also.
+#histograms, and diagnostic plots.
+
+
+```
+
+
+
+```{r logistic models}
+
+#==============================
+#1. Preparing the data
+
+# Replace logistic_data with your dataframe name
+
+logistic_data <- for_agnostic_models %>%
+  mutate(
+    across(
+      c(
+        child_age_years,
+        multilingual_rate,
+        beleifs_ahead_in_life,
+        beleifs_belonging,
+        beliefs_cognitive_benefits,
+        worry_master_languages,
+        worry_cognitive_difficulties,
+        worry_school_difficulties
+      ),
+      ~ as.numeric(scale(.x)),
+      .names = "{.col}_z"
+    )
+  )
+
+# Verify both outcomes are binary
+table(logistic_data$degree_of_activeness_combined,
+      useNA = "ifany")
+
+table(logistic_data$language_matching_combined,
+      useNA = "ifany")
+
+#ensure all models are using the same observations (to make model fit metrics comparable)
+
+
+predictors <- c(
+  "child_age_years_z",
+  "multilingual_rate_z",
+  "beleifs_ahead_in_life_z",
+  "beleifs_belonging_z",
+  "beliefs_cognitive_benefits_z",
+  "worry_master_languages_z",
+  "worry_cognitive_difficulties_z",
+  "worry_school_difficulties_z"
+)
+
+outcomes <- c(
+  "degree_of_activeness_combined",
+  "language_matching_combined"
+)
+
+# Complete cases for all variables in the models
+logistic_complete <- logistic_data %>%
+  drop_na(all_of(c(predictors, outcomes)))
+
+nrow(logistic_complete)
+
+#===========================================
+
+#Fit logistic models for degree of activeness
+
+
+# Societal model
+active_societal_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    multilingual_rate_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Family model
+active_family_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Both layers
+active_both_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    multilingual_rate_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+#==========================================
+#fit logistic models for language matching
+
+
+
+# Societal model
+matching_societal_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    multilingual_rate_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Family model
+matching_family_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Both layers
+matching_both_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    multilingual_rate_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+
+#=======================================================
+#Create publication ready tables
+
+
+coef_names_log <- c(
+  "(Intercept)" = "Intercept",
+  "child_age_years_z" = "Child age",
+  "multilingual_rate_z" = "Multilingualism rate",
+  "beleifs_ahead_in_life_z" = "Beliefs: Future opportunities",
+  "beleifs_belonging_z" = "Beliefs: Belonging",
+  "beliefs_cognitive_benefits_z" = "Beliefs: Cognitive benefits",
+  "worry_master_languages_z" = "Concern: Language mastery",
+  "worry_cognitive_difficulties_z" = "Concern: Cognitive difficulties",
+  "worry_school_difficulties_z" = "Concern: School difficulties"
+)
+
+# McFadden's pseudo-R²
+mcfadden_r2 <- function(model) {
+  1 - as.numeric(
+    logLik(model) / logLik(update(model, . ~ 1))
+  )
+}
+
+# Define additional model statistics
+glance_custom.glm <- function(x, ...) {
+  data.frame(
+    mcfadden = mcfadden_r2(x)
+  )
+}
+
+# Goodness-of-fit statistics
+gof_log <- data.frame(
+  raw = c(
+    "nobs",
+    "mcfadden",
+    "aic",
+    "bic"
+  ),
+  clean = c(
+    "Observations",
+    "McFadden's pseudo-R²",
+    "AIC",
+    "BIC"
+  ),
+  fmt = c(0, 3, 1, 1)
+)
+
+
+
+#=== 
+#Degree of activeness table
+
+models_active_log <- list(
+  "Societal" = active_societal_log,
+  "Family" = active_family_log,
+  "Both layers" = active_both_log
+)
+
+table_active_log <- modelsummary(
+  models_active_log,
+  coef_map = coef_names_log,
+exponentiate = FALSE,
+estimate = "{estimate}{stars}",
+statistic = "({std.error})",
+  conf_level = 0.95,
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_log,
+  output = "flextable"
+)
+
+table_active_log <- table_active_log |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_active_log
+
+#=== 
+#Language matching table
+
+models_matching_log <- list(
+  "Societal" = matching_societal_log,
+  "Family" = matching_family_log,
+  "Both layers" = matching_both_log
+)
+
+table_matching_log <- modelsummary(
+  models_matching_log,
+  coef_map = coef_names_log,
+exponentiate = FALSE,
+estimate = "{estimate}{stars}",
+statistic = "({std.error})",
+  conf_level = 0.95,
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_log,
+  output = "flextable"
+)
+
+table_matching_log <- table_matching_log |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_matching_log
+
+#=========
+#save tables
+
+save_as_docx(
+  "Table 1. Logistic regression models predicting degree of activeness" =
+    table_active_log,
+
+  "Table 2. Logistic regression models predicting language matching" =
+    table_matching_log,
+
+  path = "logistic_regression_results.docx"
+)
+
+
+
+# Function to extract likelihood-ratio comparisons
+extract_lr <- function(model_small, model_large,
+                       outcome, comparison) {
+
+  result <- anova(
+    model_small,
+    model_large,
+    test = "Chisq"
+  )
+
+  tibble(
+    Outcome = outcome,
+    Comparison = comparison,
+    Chi_square = result$Deviance[2],
+    df = result$Df[2],
+    p = result$`Pr(>Chi)`[2]
+  )
+}
+
+anova_log_table <- bind_rows(
+  extract_lr(
+    active_societal_log,
+    active_both_log,
+    "Degree of activeness",
+    "Societal vs. both"
+  ),
+  extract_lr(
+    active_family_log,
+    active_both_log,
+    "Degree of activeness",
+    "Family vs. both"
+  ),
+  extract_lr(
+    matching_societal_log,
+    matching_both_log,
+    "Language matching",
+    "Societal vs. both"
+  ),
+  extract_lr(
+    matching_family_log,
+    matching_both_log,
+    "Language matching",
+    "Family vs. both"
+  )
+) %>%
+  mutate(
+    Chi_square = round(Chi_square, 2),
+    p = ifelse(
+      p < .001,
+      "< .001",
+      sprintf("%.3f", p)
+    )
+  )
+
+anova_log_flex <- flextable(anova_log_table) |>
+  set_header_labels(
+    Chi_square = "χ²",
+    df = "df",
+    p = "p"
+  ) |>
+  theme_booktabs() |>
+  autofit()
+
+anova_log_flex
+
+
+
+```
 
 
 
