@@ -2417,7 +2417,7 @@ corrplot(
 #==============================
 #1. Preparing the data
 
-# Replace logistic_data with your dataframe name
+
 
 logistic_data <- for_agnostic_models %>%
   mutate(
@@ -3661,6 +3661,16 @@ table_heritage <- make_hist_table(
 
 table_community
 table_heritage
+
+
+
+table_specific_hist <- make_hist_table(
+  data = model_data_long,
+  labels = specific_labels,
+  color = "#8DAEE1"
+)
+
+table_specific_hist
 
 
 # ============================================================
