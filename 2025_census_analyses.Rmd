@@ -27,6 +27,7 @@ library(cansim)
 library(lme4)
 library(lmerTest)
 library(performance)
+library(arrow)
 
 census_data<- read_excel("Anonymized_Data/census_data.xlsx")
 column_clean_names<- read.csv("column_clean_names.csv")
@@ -309,9 +310,34 @@ qc_geo_cd <- qc_geo_cd %>%
 # data before loading it fully into R memory.
 
 #WARNING This line takes about 15 minutes to run unless you add a local cache space in your computer
-knowledge_con <- get_cansim_connection(
-  "98-10-0216-01"
+#On October 21 the connection with the canada census server broke, before fixing, making a workarounf from the downloaded table instead of relying on the server
+# knowledge_con <- get_cansim_connection(
+#   "98-10-0216-01"
+# )
+
+# 2. Access the locally cached Statistics Canada table
+# ---------------------------------------------------
+#
+# On October 21, 2026, the cansim API began returning an
+# invalid JSON response, preventing get_cansim_connection()
+# from working.
+#
+# The previously downloaded census table remains available
+# locally in Parquet format.
+#
+# We access it directly through arrow::open_dataset(),
+# bypassing the API without downloading the table again.
+#
+# Like get_cansim_connection(), open_dataset() creates a
+# lazy Arrow dataset, allowing filtering before collect().
+
+knowledge_con <- arrow::open_dataset(
+  "C:/Users/andre/cansim_cache/cansim_98100216_parquet_eng/98100216-eng.parquet"
 )
+
+
+
+
 
 
 # 3. Extract the relevant Quebec Census Division rows
@@ -402,6 +428,12 @@ qc_cd_multilingual_rate <- qc_cd_multilingual_rate %>%
 # because IDs are stable and avoid problems caused by accents,
 # punctuation, spelling differences, or formatting.
 
+# 5. Match StatCan multilingualism estimates to Census Divisions
+# ------------------------------------------------------------
+
+# 5. Match StatCan multilingualism estimates to Census Divisions
+# ------------------------------------------------------------
+
 cd_multilingual_rate <- qc_geo_cd %>%
   left_join(
     qc_cd_multilingual_rate %>%
@@ -411,6 +443,18 @@ cd_multilingual_rate <- qc_geo_cd %>%
       ),
     by = "geo_uid"
   )
+#sanity check after the october 21st issues
+
+# Check how many Census Divisions received a multilingualism rate
+cd_multilingual_rate %>%
+  summarise(
+    n_regions = n(),
+    n_matched = sum(!is.na(multilingual_rate)),
+    n_missing = sum(is.na(multilingual_rate)),
+    min_rate = min(multilingual_rate, na.rm = TRUE),
+    max_rate = max(multilingual_rate, na.rm = TRUE)
+  )
+
 
 
 # 6. Merge the regional multilingualism rate into the survey data
@@ -423,7 +467,28 @@ cd_multilingual_rate <- qc_geo_cd %>%
 # All participants living in the same Census Division receive the same
 # regional multilingualism-rate value.
 
+# 6. Harmonize geographic names and merge into survey data
+# ------------------------------------------------------------
+
 clean_w_predictors <- clean_w_predictors %>%
+
+  # Remove columns from the previous join
+  select(-any_of(c("multilingual_rate", "geo_uid"))) %>%
+
+  # Standardize survey Census Division names
+  mutate(
+    census_subdivision = case_when(
+      census_subdivision == "Les Îles-de-la-Madeleine" ~
+        "Communauté maritime des Îles-de-la-Madeleine",
+
+      census_subdivision == "Côte-de-Gaspé" ~
+        "La Côte-de-Gaspé",
+
+      TRUE ~ census_subdivision
+    )
+  ) %>%
+
+  # Join using the harmonized names
   left_join(
     cd_multilingual_rate,
     by = "census_subdivision"
@@ -482,7 +547,7 @@ languages_heard <- clean_w_predictors %>%
       language == "Créole Reunionnais" ~ "Creole languages, n.i.e.",
       language == "Créole reunionnais" ~ "Creole languages, n.i.e.",
       language == "Créole réunionnais" ~ "Creole languages, n.i.e.",
-      language == "créole haïtien" ~ "Hatian Creole",
+      language == "créole haïtien" ~ "Haitian Creole",
        language == "le lingala" ~ "Lingala",
       language == "Italien" ~ "Italian",
       language == "Lsq" ~ "QSL",
@@ -492,9 +557,8 @@ languages_heard <- clean_w_predictors %>%
       language == "Cri" ~ "Cree",
       language == "Russe" ~ "Russian",
       language == "Arabe" ~ "Arabic",
-      language == "Mooré"~ "Moore",
-      language == "Moore" ~ "Niger-Congo languages, n.i.e.",
-      language == "Banen" ~ "Niger-Congo languages, n.i.e.",
+language %in% c("Mooré", "Moore", "Banen") ~
+  "Niger-Congo languages, n.i.e.",
       language == "Non"~ NA,
       TRUE ~ language
     )
@@ -721,7 +785,8 @@ data_clean_long <- languages_heard %>%
     )
   )
 
-data_clean_long<- data_clean_long %>%
+data_clean_long <- data_clean_long %>%
+  filter(!is.na(language)) %>%
   select(-language_type)
 
 #Join this to our data frame to have all the predictors in place
@@ -1218,7 +1283,7 @@ english_model_data <- long_with_predictors %>%
   transmute(
     internal_id,
     language,
-    language_type = "English",
+    language_type = "Community",
     child_age_years,
 
     # Outcomes
@@ -1253,7 +1318,7 @@ french_model_data <- long_with_predictors %>%
   transmute(
     internal_id,
     language,
-    language_type = "French",
+    language_type = "Community",
     child_age_years,
 
     # Outcomes
@@ -1285,7 +1350,7 @@ minority_model_data <- minority_cor_data %>%
   transmute(
     internal_id,
     language = minority_language,
-    language_type = "Minority",
+    language_type = "Heritage",
     child_age_years,
 
     # Outcomes
@@ -1321,7 +1386,7 @@ model_data_long <- bind_rows(
   mutate(
     language_type = factor(
       language_type,
-      levels = c("English", "French", "Minority")
+      levels = c("Community", "Heritage")
     )
   )
 
@@ -1860,8 +1925,364 @@ save_as_docx(
 #4. Explore relationships visually , especially with language type
 
 
+library(tidyverse)
+library(patchwork)
+
+
+# ------------------------------------------------------------
+# 1. Prepare exploratory plotting data
+# ------------------------------------------------------------
+
+interaction_data <- model_data_long %>%
+  mutate(
+    language_group = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    )
+  ) %>%
+  filter(!is.na(language_group))
+
+# Verify that both groups are present
+table(interaction_data$language_group)
+
+# Expected:
+# Community  Heritage
+#       361        80
+
+
+# ------------------------------------------------------------
+# 2. Function to create an interaction plot
+# ------------------------------------------------------------
+
+plot_interaction <- function(data, predictor, outcome,
+                             x_label, y_label) {
+
+  ggplot(
+    data,
+    aes(
+      x = .data[[predictor]],
+      y = .data[[outcome]],
+      color = language_group,
+      fill = language_group
+    )
+  ) +
+    geom_point(
+      alpha = 0.25,
+      size = 1.8,
+      position = position_jitter(
+        width = 0.05,
+        height = 0
+      )
+    ) +
+    geom_smooth(
+      method = "lm",
+      formula = y ~ x,
+      se = TRUE,
+      linewidth = 1.2,
+      alpha = 0.15
+    ) +
+    scale_color_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+    scale_fill_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+    labs(
+      x = x_label,
+      y = y_label,
+      color = "Language type",
+      fill = "Language type"
+    ) +
+    theme_classic(base_size = 13) +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold")
+    )
+}
+
+# ------------------------------------------------------------
+# 3. Active language use plots
+# ------------------------------------------------------------
+
+p1 <- plot_interaction(
+  interaction_data,
+  "overall_exposure_z",
+  "active_use",
+  "Overall language exposure (z)",
+  "Active language use"
+) +
+  ggtitle("A. Exposure × Language type")
+
+p2 <- plot_interaction(
+  interaction_data,
+  "number_sources_z",
+  "active_use",
+  "Number of language sources (z)",
+  "Active language use"
+) +
+  ggtitle("B. Sources × Language type")
+
+p3 <- plot_interaction(
+  interaction_data,
+  "book_reading_z",
+  "active_use",
+  "Book reading (z)",
+  "Active language use"
+) +
+  ggtitle("C. Reading × Language type")
+
+# ------------------------------------------------------------
+# 4. Interlocutor matching plots
+# ------------------------------------------------------------
+
+p4 <- plot_interaction(
+  interaction_data,
+  "overall_exposure_z",
+  "interlocutor_matching",
+  "Overall language exposure (z)",
+  "Interlocutor matching (%)"
+) +
+  ggtitle("D. Exposure × Language type")
+
+p5 <- plot_interaction(
+  interaction_data,
+  "number_sources_z",
+  "interlocutor_matching",
+  "Number of language sources (z)",
+  "Interlocutor matching (%)"
+) +
+  ggtitle("E. Sources × Language type")
+
+p6 <- plot_interaction(
+  interaction_data,
+  "book_reading_z",
+  "interlocutor_matching",
+  "Book reading (z)",
+  "Interlocutor matching (%)"
+) +
+  ggtitle("F. Reading × Language type")
+
+# ------------------------------------------------------------
+# 5. Combine all six plots
+# ------------------------------------------------------------
+
+# ============================================================
+# 1. Increase font sizes across all six plots
+# ============================================================
+
+larger_theme <- theme(
+  plot.title = element_text(
+    size = 17,
+    face = "bold",
+    margin = margin(b = 10)
+  ),
+  axis.title = element_text(size = 16),
+  axis.text = element_text(size = 14),
+  legend.title = element_text(size = 15),
+  legend.text = element_text(size = 14),
+  strip.text = element_text(size = 15),
+  plot.margin = margin(10, 10, 10, 10)
+)
+
+# ============================================================
+# 2. Apply formatting and shorten panel titles
+# ============================================================
+
+p1 <- p1 + larger_theme +
+  labs(title = "A. Exposure × Language type")
+
+p2 <- p2 + larger_theme +
+  labs(title = "C. Sources × Language type")
+
+p3 <- p3 + larger_theme +
+  labs(title = "E. Reading × Language type")
+
+p4 <- p4 + larger_theme +
+  labs(title = "B. Exposure × Language type")
+
+p5 <- p5 + larger_theme +
+  labs(title = "D. Sources × Language type")
+
+p6 <- p6 + larger_theme +
+  labs(title = "F. Reading × Language type")
+
+# ============================================================
+# 3. Arrange in 2 columns × 3 rows
+# ============================================================
+
+interaction_figure <- (
+  (p1 | p4) /
+  (p2 | p5) /
+  (p3 | p6)
+) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+interaction_figure
+
+# ============================================================
+# 4. Save for a portrait Word manuscript
+# ============================================================
+
+ggsave(
+  "exploratory_language_interactions.png",
+  interaction_figure,
+  width = 9,
+  height = 15,
+  dpi = 300
+)
+
+#  vector PDF for maximum sharpness
+# ggsave(
+#   filename = "exploratory_language_interactions_portrait.pdf",
+#   plot = interaction_figure,
+#   width = 7.2,
+#   height = 10,
+#   units = "in",
+#   bg = "white"
+# )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============================================================
 #5. Build exploratory models with interactions
+
+
+
+library(lme4)
+library(lmerTest)
+library(dplyr)
+
+# ============================================================
+# 1. PREPARE DATA
+# ============================================================
+
+interaction_data <- model_data_long %>%
+  mutate(
+    language_type = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    )
+  ) %>%
+  filter(!is.na(language_type))
+
+# ============================================================
+# 2. ACTIVE LANGUAGE USE
+# ============================================================
+
+# Use the same observations for both models
+active_int_data <- interaction_data %>%
+  tidyr::drop_na(
+    active_use,
+    overall_exposure_z,
+    child_age_years_z,
+    book_reading_z,
+    number_sources_z,
+    language_type,
+    internal_id
+  )
+
+# Main-effects model
+active_main <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    book_reading_z +
+    number_sources_z +
+    language_type +
+    (1 | internal_id),
+  data = active_int_data,
+  REML = FALSE
+)
+
+# Exposure × language type interaction
+active_interaction <- lmer(
+  active_use ~
+    overall_exposure_z * language_type +
+    child_age_years_z +
+    book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = active_int_data,
+  REML = FALSE
+)
+
+# Compare models
+anova(active_main, active_interaction)
+
+# Inspect interaction coefficients
+summary(active_interaction)
+
+
+# ============================================================
+# 3. INTERLOCUTOR MATCHING
+# ============================================================
+
+matching_int_data <- interaction_data %>%
+  tidyr::drop_na(
+    interlocutor_matching,
+    overall_exposure_z,
+    child_age_years_z,
+    book_reading_z,
+    number_sources_z,
+    language_type,
+    internal_id
+  )
+
+# Main-effects model
+matching_main <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+    book_reading_z +
+    number_sources_z +
+    language_type +
+    (1 | internal_id),
+  data = matching_int_data,
+  REML = FALSE
+)
+
+# Three interaction terms
+matching_interaction <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z * language_type +
+    number_sources_z * language_type +
+    book_reading_z * language_type +
+    child_age_years_z +
+    (1 | internal_id),
+  data = matching_int_data,
+  REML = FALSE
+)
+
+# Compare models
+anova(matching_main, matching_interaction)
+
+# Inspect interaction coefficients
+summary(matching_interaction)
+
+
+
+
+
+
 
 # ============================================================
 
@@ -1990,8 +2411,6 @@ corrplot(
 
 
 ```
-
-
 
 ```{r logistic models}
 
@@ -2341,8 +2760,6 @@ anova_log_flex
 
 
 ```
-
-
 
 ```{r methods descriptives}
 
@@ -3000,3 +3417,314 @@ ggplot(
 
 
 ```
+
+```{r predictors tables methods}
+
+
+library(tidyverse)
+library(flextable)
+library(ggplot2)
+library(officer)
+
+# Language-specific variables
+specific_labels <- c(
+  active_use = "Active language use",
+  interlocutor_matching = "Interlocutor matching (%)",
+  child_age_years = "Child age (years)",
+  speaker_rate = "Regional speaker rate",
+  book_resources = "Book resources",
+  overall_exposure = "Overall language exposure",
+  book_reading = "Book reading",
+  number_sources = "Number of language sources"
+)
+
+# Language-agnostic variables
+agnostic_labels <- c(
+  degree_of_activeness_combined = "Degree of activeness",
+  language_matching_combined = "Language matching",
+  child_age_years = "Child age (years)",
+  multilingual_rate = "Multilingualism rate",
+  beleifs_ahead_in_life = "Beliefs: Future opportunities",
+  beleifs_belonging = "Beliefs: Belonging",
+  beliefs_cognitive_benefits = "Beliefs: Cognitive benefits",
+  worry_master_languages = "Concern: Language mastery",
+  worry_cognitive_difficulties = "Concern: Cognitive difficulties",
+  worry_school_difficulties = "Concern: School difficulties"
+)
+
+
+
+# ============================================================
+# Function: create mini histograms also called sparklines
+# ============================================================
+
+mini_hist <- function(x, color = "#8DAEE1") {
+
+  x <- x[!is.na(x)]
+
+  if (length(x) == 0) {
+    return(
+      ggplot() +
+        theme_void()
+    )
+  }
+
+  # Use bars for variables with few unique values
+  if (length(unique(x)) <= 10) {
+
+    plot_data <- tibble(value = x) %>%
+      count(value)
+
+    p <- ggplot(plot_data, aes(x = value, y = n)) +
+      geom_col(
+        fill = color,
+        width = 0.8
+      )
+
+  } else {
+
+    p <- ggplot(
+      tibble(value = x),
+      aes(x = value)
+    ) +
+      geom_histogram(
+        bins = 12,
+        fill = color,
+        color = "white",
+        linewidth = 0.15
+      )
+  }
+
+  p +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    theme_void() +
+    theme(
+      plot.margin = margin(0, 0, 0, 0)
+    )
+}
+
+
+# ============================================================
+# Descriptive table with embedded histograms
+# ============================================================
+
+
+
+make_hist_table <- function(data, labels,
+                            color = "#8DAEE1") {
+
+  variables <- names(labels)
+
+  # Check columns exist
+  missing_vars <- setdiff(variables, names(data))
+
+  if (length(missing_vars) > 0) {
+    stop(
+      "Missing columns: ",
+      paste(missing_vars, collapse = ", ")
+    )
+  }
+
+  # Create summary rows using a standard loop
+  summary_list <- vector("list", length(variables))
+
+  for (i in seq_along(variables)) {
+
+    var <- variables[i]
+
+    x <- data[[var]]
+    x <- x[!is.na(x)]
+
+    if (!is.numeric(x)) {
+      stop(paste("Variable is not numeric:", var))
+    }
+
+    summary_list[[i]] <- data.frame(
+      variable = var,
+      Variable = unname(labels[[var]]),
+      N = length(x),
+      `M (SD)` = if (length(x) > 1) {
+        sprintf("%.2f (%.2f)", mean(x), sd(x))
+      } else {
+        "—"
+      },
+      Median = if (length(x) > 0) {
+        sprintf("%.2f", median(x))
+      } else {
+        "—"
+      },
+      Range = if (length(x) > 0) {
+        sprintf("%.2f–%.2f", min(x), max(x))
+      } else {
+        "—"
+      },
+      Distribution = "",
+      check.names = FALSE
+    )
+  }
+
+  summary_data <- dplyr::bind_rows(summary_list)
+
+  # Create table
+  ft <- flextable::flextable(
+    summary_data %>% dplyr::select(-variable)
+  ) %>%
+    flextable::theme_booktabs()
+
+  # Create and insert mini histograms
+  for (i in seq_len(nrow(summary_data))) {
+
+    var <- summary_data$variable[i]
+
+    p <- mini_hist(
+      data[[var]],
+      color = color
+    )
+
+    img_file <- tempfile(fileext = ".png")
+
+    ggplot2::ggsave(
+      filename = img_file,
+      plot = p,
+      width = 1.3,
+      height = 0.45,
+      units = "in",
+      dpi = 200,
+      bg = "white"
+    )
+
+    ft <- flextable::compose(
+      ft,
+      i = i,
+      j = "Distribution",
+      value = flextable::as_paragraph(
+        flextable::as_image(
+          src = img_file,
+          width = 1.3,
+          height = 0.45
+        )
+      )
+    )
+  }
+
+  # Format
+  ft <- ft %>%
+    flextable::fontsize(size = 9, part = "all") %>%
+    flextable::width(j = "Variable", width = 1.9) %>%
+    flextable::width(j = "Distribution", width = 1.4) %>%
+    flextable::align(
+      j = 2:6,
+      align = "center",
+      part = "body"
+    ) %>%
+    flextable::valign(
+      valign = "center",
+      part = "all"
+    ) %>%
+    flextable::padding(
+      padding = 3,
+      part = "all"
+    )
+
+  return(ft)
+}
+
+
+
+
+
+# ============================================================
+# Community language descriptives
+# ============================================================
+
+community_data <- model_data_long %>%
+  filter(language_type == "Community")
+
+table_community <- make_hist_table(
+  data = community_data,
+  labels = specific_labels,
+  color = "#8DAEE1"
+)
+
+# ============================================================
+# Heritage language descriptives
+# ============================================================
+
+heritage_data <- model_data_long %>%
+  filter(language_type == "Heritage")
+
+table_heritage <- make_hist_table(
+  data = heritage_data,
+  labels = specific_labels,
+  color = "#B0DA87"
+)
+
+table_community
+table_heritage
+
+
+# ============================================================
+# Language-agnostic predictor table
+# ============================================================
+
+agnostic_predictor_labels <- agnostic_labels[
+  !names(agnostic_labels) %in% c(
+    "degree_of_activeness_combined",
+    "language_matching_combined"
+  )
+]
+
+table_agnostic_hist <- make_hist_table(
+  data = logistic_data,
+  labels = agnostic_predictor_labels,
+  color = "#8DAEE1"
+)
+
+table_agnostic_hist
+
+# ============================================================
+# Binary outcome descriptives
+# ============================================================
+
+binary_outcomes <- logistic_data %>%
+  summarise(
+    `Degree of activeness` =
+      sprintf(
+        "%d / %d (%.1f%%)",
+        sum(degree_of_activeness_combined == 1, na.rm = TRUE),
+        sum(!is.na(degree_of_activeness_combined)),
+        100 * mean(degree_of_activeness_combined == 1, na.rm = TRUE)
+      ),
+    `Language matching` =
+      sprintf(
+        "%d / %d (%.1f%%)",
+        sum(language_matching_combined == 1, na.rm = TRUE),
+        sum(!is.na(language_matching_combined)),
+        100 * mean(language_matching_combined == 1, na.rm = TRUE)
+      )
+  )
+
+binary_outcomes
+
+
+save_as_docx(
+  "Table 1. Language-specific descriptive statistics" =
+    table_specific_hist,
+
+  "Table S1. Community language descriptive statistics" =
+    table_community,
+
+  "Table S2. Heritage language descriptive statistics" =
+    table_heritage,
+
+  "Table 2. Language-agnostic predictor descriptive statistics" =
+    table_agnostic_hist,
+
+  path = "descriptive_statistics_with_histograms.docx"
+)
+
+
+
+
+```
+
