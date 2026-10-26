@@ -1924,37 +1924,31 @@ save_as_docx(
 
 
 
-# ============================================================
-#4. Explore relationships visually , especially with language type
 
+# ============================================================
+# 4. EXPLORE INTERACTIONS VISUALLY
+# ============================================================
 
 library(tidyverse)
 library(patchwork)
 
-
 # ------------------------------------------------------------
-# 1. Prepare exploratory plotting data
+# 1. Prepare plotting data
 # ------------------------------------------------------------
 
 interaction_data <- model_data_long %>%
   mutate(
-    language_group = factor(
+    language_type = factor(
       as.character(language_type),
       levels = c("Community", "Heritage")
     )
   ) %>%
-  filter(!is.na(language_group))
+  filter(!is.na(language_type))
 
-# Verify that both groups are present
-table(interaction_data$language_group)
-
-# Expected:
-# Community  Heritage
-#       361        80
-
+table(interaction_data$language_type)
 
 # ------------------------------------------------------------
-# 2. Function to create an interaction plot
+# 2. Function to create interaction plots
 # ------------------------------------------------------------
 
 plot_interaction <- function(data, predictor, outcome,
@@ -1965,8 +1959,8 @@ plot_interaction <- function(data, predictor, outcome,
     aes(
       x = .data[[predictor]],
       y = .data[[outcome]],
-      color = language_group,
-      fill = language_group
+      color = language_type,
+      fill = language_type
     )
   ) +
     geom_point(
@@ -2010,171 +2004,145 @@ plot_interaction <- function(data, predictor, outcome,
 }
 
 # ------------------------------------------------------------
-# 3. Active language use plots
+# 3. Define predictors to visualize
 # ------------------------------------------------------------
 
-p1 <- plot_interaction(
-  interaction_data,
-  "overall_exposure_z",
-  "active_use",
-  "Overall language exposure (z)",
-  "Active language use"
-) +
-  ggtitle("A. Exposure × Language type")
-
-p2 <- plot_interaction(
-  interaction_data,
-  "number_sources_z",
-  "active_use",
-  "Number of language sources (z)",
-  "Active language use"
-) +
-  ggtitle("B. Sources × Language type")
-
-p3 <- plot_interaction(
-  interaction_data,
-  "book_reading_z",
-  "active_use",
-  "Book reading (z)",
-  "Active language use"
-) +
-  ggtitle("C. Reading × Language type")
-
-p3.3 <- plot_interaction(
-  interaction_data,
-  "speaker_rate_z",
-  "active_use",
-  "Speaker rate (z)",
-  "Active language use"
-) +
-  ggtitle("C. Speaker rate × Language type")
-
-
-p3.4 <- plot_interaction(
-  interaction_data,
-  "book_resources_z",
-  "active_use",
-  "Book resources (z)",
-  "Active language use"
-) +
-  ggtitle("C. Book resources × Language type")
-
+predictors <- tibble(
+  predictor = c(
+    "overall_exposure_z",
+    "speaker_rate_z",
+    "book_resources_z",
+    "book_reading_z",
+    "number_sources_z"
+  ),
+  label = c(
+    "Overall language exposure (z)",
+    "Speaker rate (z)",
+    "Access to books (z)",
+    "Book reading (z)",
+    "Number of language sources (z)"
+  ),
+  title = c(
+    "Exposure",
+    "Speaker rate",
+    "Book resources",
+    "Reading",
+    "Sources"
+  )
+)
 
 # ------------------------------------------------------------
-# 4. Interlocutor matching plots
+# 4. Create plots for both outcomes
 # ------------------------------------------------------------
 
-p4 <- plot_interaction(
-  interaction_data,
-  "overall_exposure_z",
-  "interlocutor_matching",
-  "Overall language exposure (z)",
-  "Interlocutor matching (%)"
-) +
-  ggtitle("D. Exposure × Language type")
+active_plots <- purrr::map2(
+  predictors$predictor,
+  predictors$label,
+  ~ plot_interaction(
+    interaction_data,
+    .x,
+    "active_use",
+    .y,
+    "Active language use"
+  )
+)
 
-p5 <- plot_interaction(
-  interaction_data,
-  "number_sources_z",
-  "interlocutor_matching",
-  "Number of language sources (z)",
-  "Interlocutor matching (%)"
-) +
-  ggtitle("E. Sources × Language type")
-
-p6 <- plot_interaction(
-  interaction_data,
-  "book_reading_z",
-  "interlocutor_matching",
-  "Book reading (z)",
-  "Interlocutor matching (%)"
-) +
-  ggtitle("F. Reading × Language type")
+matching_plots <- purrr::map2(
+  predictors$predictor,
+  predictors$label,
+  ~ plot_interaction(
+    interaction_data,
+    .x,
+    "interlocutor_matching",
+    .y,
+    "Interlocutor matching (%)"
+  )
+)
 
 # ------------------------------------------------------------
-# 5. Combine all six plots
+# 5. Apply formatting
 # ------------------------------------------------------------
-
-# ============================================================
-# 1. Increase font sizes across all six plots
-# ============================================================
 
 larger_theme <- theme(
   plot.title = element_text(
-    size = 17,
+    size = 15,
     face = "bold",
-    margin = margin(b = 10)
+    margin = margin(b = 8)
   ),
-  axis.title = element_text(size = 16),
-  axis.text = element_text(size = 14),
-  legend.title = element_text(size = 15),
-  legend.text = element_text(size = 14),
-  strip.text = element_text(size = 15),
-  plot.margin = margin(10, 10, 10, 10)
+  axis.title = element_text(size = 14),
+  axis.text = element_text(size = 12),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size = 13),
+  plot.margin = margin(8, 8, 8, 8)
 )
 
-# ============================================================
-# 2. Apply formatting and shorten panel titles
-# ============================================================
+# Arrange plots row by row:
+# Active use (left), Matching (right)
 
-p1 <- p1 + larger_theme +
-  labs(title = "A. Exposure × Language type")
+all_plots <- list()
 
-p2 <- p2 + larger_theme +
-  labs(title = "C. Sources × Language type")
+for (i in seq_len(nrow(predictors))) {
 
-p3 <- p3 + larger_theme +
-  labs(title = "E. Reading × Language type")
+  active_plots[[i]] <- active_plots[[i]] +
+    labs(
+      title = paste0(
+        LETTERS[2 * i - 1], ". ",
+        predictors$title[i],
+        " × Language type"
+      )
+    ) +
+    larger_theme
 
-p4 <- p4 + larger_theme +
-  labs(title = "B. Exposure × Language type")
+  matching_plots[[i]] <- matching_plots[[i]] +
+    labs(
+      title = paste0(
+        LETTERS[2 * i], ". ",
+        predictors$title[i],
+        " × Language type"
+      )
+    ) +
+    larger_theme
 
-p5 <- p5 + larger_theme +
-  labs(title = "D. Sources × Language type")
+  all_plots <- append(
+    all_plots,
+    list(active_plots[[i]], matching_plots[[i]])
+  )
+}
 
-p6 <- p6 + larger_theme +
-  labs(title = "F. Reading × Language type")
+# ------------------------------------------------------------
+# 6. Combine into 2 columns x 5 rows
+# ------------------------------------------------------------
 
-# ============================================================
-# 3. Arrange in 2 columns × 3 rows
-# ============================================================
-
-interaction_figure <- (
-  (p1 | p4) /
-  (p2 | p5) /
-  (p3 | p6)
-) +
-  plot_layout(guides = "collect") &
+interaction_figure <- wrap_plots(
+  all_plots,
+  ncol = 2,
+  guides = "collect"
+) &
   theme(legend.position = "bottom")
 
 interaction_figure
 
-# ============================================================
-# 4. Save for a portrait Word manuscript
-# ============================================================
+# ------------------------------------------------------------
+# 7. Save high-resolution figure
+# ------------------------------------------------------------
 
 ggsave(
-  "exploratory_language_interactions.png",
+  "exploratory_language_interactions_full.png",
   interaction_figure,
-  width = 9,
-  height = 15,
-  dpi = 300
+  width = 10,
+  height = 20,
+  dpi = 300,
+  bg = "white"
 )
 
-#  vector PDF for maximum sharpness
+# Optional: vector PDF
 # ggsave(
-#   filename = "exploratory_language_interactions_portrait.pdf",
-#   plot = interaction_figure,
-#   width = 7.2,
-#   height = 10,
-#   units = "in",
+#   "exploratory_language_interactions_full.pdf",
+#   interaction_figure,
+#   width = 10,
+#   height = 20,
 #   bg = "white"
 # )
-
-
-
-
-
 
 
 
@@ -4102,7 +4070,7 @@ ggsave(
   height = 12
 )
 
-
+#Make the panels go like child language, then the percentage based measures, then number of sources, then the 1 to 7 scales. Make the percentage based have the same scale.
 
 library(dplyr)
 library(ggplot2)
@@ -4234,7 +4202,8 @@ ggsave(
   height = 5,
   bg = "white"
 )
-
+ 
+#For interlocutor matching make the bins smaller like 0-25, 25-50, etc... then like check if haviing the separate bin for 100 makes sense, compare the two graphs.
 
 #==========================
 #Binary outcome distributions
