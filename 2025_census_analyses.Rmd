@@ -234,6 +234,12 @@ clean_w_predictors <- clean_w_predictors %>%
 clean_w_predictors <- clean_w_predictors %>%
   mutate(minority_lang_count = as.integer(as.character(minority_lang_count)))
 
+old_data <- old_data %>%
+  mutate(data_collection = "first")
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(data_collection = "second")
+
 clean_w_predictors<- clean_w_predictors %>%
   full_join(old_data)
 
@@ -2627,36 +2633,36 @@ for_agnostic_correlation <- for_agnostic_correlation %>%
   mutate(across(everything(), as.numeric))
 
 
-
-language_agnostic_correlation <- cor(
- for_agnostic_correlation,
-  use = "pairwise.complete.obs",
-  method = "spearman"
-)
- library(psych)
-
-language_agnostic_correlation<- psych::corr.test(
-  language_agnostic_correlation,
-  method = "spearman",
-  use = "pairwise",
-  adjust = "none"
-)
-
-
-# Significance at p < .05
-agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
-
-agnostic_significant_correlations
-
-
-corrplot(
-  language_agnostic_correlation,
-  method = "circle",
-  type = "upper",
-  diag = TRUE,
-  tl.col = "black",
-  tl.srt = 45,
-)
+# 
+# language_agnostic_correlation <- cor(
+#  for_agnostic_correlation,
+#   use = "pairwise.complete.obs",
+#   method = "spearman"
+# )
+#  library(psych)
+# 
+# language_agnostic_correlation<- psych::corr.test(
+#   language_agnostic_correlation,
+#   method = "spearman",
+#   use = "pairwise",
+#   adjust = "none"
+# )
+# 
+# 
+# # Significance at p < .05
+# agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
+# 
+# agnostic_significant_correlations
+# 
+# 
+# corrplot(
+#   language_agnostic_correlation,
+#   method = "circle",
+#   type = "upper",
+#   diag = TRUE,
+#   tl.col = "black",
+#   tl.srt = 45,
+# )
 
 
 #=====================================================
