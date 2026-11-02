@@ -32,7 +32,7 @@ first_collection_clean<-clean_names(first_collection)
 
 
 first_collection_clean<- first_collection_clean %>%
-  dplyr::filter(status=="Submitted") %>%
+  dplyr::filter(status=="Submitted") #%>%
   dplyr::filter(exclude=="F") #Caolumn made to manage the developmental delay exclusions critically based on parents descriptions, also added the tests to be excluded
 
 

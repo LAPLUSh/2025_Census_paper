@@ -807,7 +807,7 @@ data_clean_long <- data_clean_long %>%
 ```
 
 
-```{r statistical analyses language specific}
+```{r correlation analyses language specific}
 
 
 for_correlation_long<- long_with_predictors %>%
@@ -3048,28 +3048,7 @@ anova_log_flex
 ```{r methods descriptives}
 
 
-# ============================================================
-# PRESENTATION DESCRIPTIVES
-# ============================================================
 
-# One row per child
-child_level <- long_with_predictors %>%
-  filter(
-    child_age_years >= 3,
-    child_age_years <9
-  ) %>%
-  distinct(internal_id, .keep_all = TRUE)
-
-
-#Santity check
-nrow(long_with_predictors)   # long language-level dataset
-nrow(child_level)        # unique children
-
-
-n_keepers <- child_level %>%
-  summarise(n = n_distinct(internal_id))
-
-n_keepers
 
 
 #------------------------------------------
@@ -3077,7 +3056,7 @@ n_keepers
 #------------------------------------------
 
 
-gender_summary <- child_level %>%
+gender_summary <- clean_w_predictors %>%
   count(child_gender, name = "n") %>%
   mutate(
     percent = round(n / sum(n) * 100, 1)
@@ -3132,11 +3111,13 @@ ggplot(
 # PARENT GENDER SUMMARY
 #---------------------------------------------------------------
 
-respondent_summary <- child_level %>%
+respondent_summary <- clean_w_predictors %>%
   count(caregiver_1, name = "n") %>%
   mutate(
     percent = round(n / sum(n) * 100, 1)
   )
+
+maternal_education <- 
 
 
 # Pie chart of respondent
@@ -3204,7 +3185,7 @@ age_summary
 
 
 
-region_summary <- child_level %>%
+region_summary <- clean_w_predictors %>%
   filter(!is.na(census_subdivision)) %>%
   count(census_subdivision, sort = TRUE, name = "n") %>%
   mutate(
@@ -3213,7 +3194,7 @@ region_summary <- child_level %>%
 
 region_summary
 
-n_regions <- child_level %>%
+n_regions <- clean_w_predictors %>%
   summarise(
     n_regions = n_distinct(census_subdivision, na.rm = TRUE)
   )
@@ -3612,9 +3593,25 @@ ggplot(
 #---------------------
 
 minority_language_summary <- model_data_long %>%
+  mutate(
+    language = case_when(
+      # Combine Creole languages
+      str_detect(language, regex("creole|créole", ignore_case = TRUE)) ~ "Creole languages",
+
+      # Standardize language names
+      language %in% c("italien", "Italian") ~ "Italian",
+      language %in% c("Russe", "Russian") ~ "Russian",
+      language == "Arabe" ~ "Arabic",
+      language == "francais" ~ "French",
+      language == "le lingala" ~ "Lingala",
+      language == "QSL" ~ "Quebec Sign Language",
+
+      TRUE ~ language
+    )
+  ) %>%
   filter(
     !is.na(language),
-    !language %in% c("French", "English")
+    !language %in% c("French", "English", "Non")
   ) %>%
   distinct(internal_id, language) %>%
   count(language, sort = TRUE, name = "n_children") %>%
@@ -3697,6 +3694,34 @@ ggplot(
     axis.text = element_text(size = 20),
     axis.title.x = element_text(size = 20)
   )
+
+
+
+#AOA DESCRIPTIVES
+
+aoa_long <- clean_w_predictors %>%
+  select(
+    internal_id,
+    aoa_english_child,
+    aoa_french_child,
+    aoa_first_min_child,
+    aoa_second_min_child,
+    aoa_third_min_child
+  ) %>%
+  pivot_longer(
+    cols = starts_with("aoa_"),
+    names_to = "language",
+    values_to = "aoa"
+  ) %>%
+  mutate(
+    language_type = case_when(
+      language %in% c("aoa_english_child", "aoa_french_child") ~ "Community",
+      TRUE ~ "Heritage"
+    )
+  ) %>%
+  filter(!is.na(aoa))
+
+
 
 
 
