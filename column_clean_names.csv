@@ -1,5 +1,6 @@
 old_names,new_names
 internal_id,internal_id
+language,survey_language
 status,status
 submitted_date,survey_date
 confirmation_number,confirmation_number
