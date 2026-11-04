@@ -28,6 +28,16 @@ library(lme4)
 library(lmerTest)
 library(performance)
 library(arrow)
+library(modelsummary)
+library(flextable)
+library(tidyverse)
+library(patchwork)
+library(tidyr)
+library(broom.mixed)
+library(officer)
+library(scales)
+library(psych)
+library(purrr)
 
 census_data<- read_excel("Anonymized_Data/census_data_w_language.xlsx")
 column_clean_names<- read.csv("column_clean_names.csv")
@@ -35,6 +45,7 @@ old_data<-read.csv("Anonymized_Data/first_collection_w_predictors.csv")
 
 ```
 
+Data cleaning and wrangling
 ```{r cleaning parent report data}
 census_data<-clean_names(census_data)
 
@@ -45,7 +56,8 @@ census_data<-clean_names(census_data)
 data_clean<- census_data %>%
   dplyr::filter(status=="Submitted") %>%
   dplyr::filter(by_clicking_on_the_i_agree_button_i_certify_that_i_have_read_the_information_and_consent_form_i_voluntarily_and_freely_consent_to_participate_in_this_research_project== "I agree") %>%
-  dplyr::filter(has_your_child_been_diagnosed_with_a_speech_disorder_or_a_language_delay== "No")
+  dplyr::filter(has_your_child_been_diagnosed_with_a_speech_disorder_or_a_language_delay== "No") %>%
+  dplyr::filter(!internal_id %in% c(39902130, 40035826, 40034298)) #bad quality data, reporting the same language multiple times and probably asimple survey glitch where this person should have gotteh screen out for being moolingual
 
 #Relocating the survey language column to last place (this is a new column added), so that new column placing does not affect the column select below
 
@@ -75,16 +87,7 @@ data_clean$child_dob <- as.Date(data_clean$child_dob)
 data_clean$child_age_years <- time_length(
   interval(data_clean$child_dob, data_clean$survey_date),
   unit = "years"
-) |> floor()
-
-#Exclusions for weird language reporting
-
-#We have to investigate three cases where French or English are doubly reported
-#   internal_id language     n
-#         <dbl> <chr>    <int>
-# 1    39902130 English      2 #exclude
-# 2    39902130 French       2 #same one, exclude
-# 3    40035826 French       2 #exclude
+) %>% floor()
 
 
 ```
@@ -237,6 +240,7 @@ clean_w_predictors <- clean_w_predictors %>%
   )
 ```
 
+
 ```{r merging new data with first collection}
  #Now that the predictors are wrangled let's select only the columns we need for the analyses
 
@@ -348,6 +352,7 @@ standardize_language <- function(x) {
 
 
 ```
+
 
 ```{r making census bilingualism rate variable}
 
@@ -871,7 +876,27 @@ data_clean_long <- data_clean_long %>%
 
 ```
 
+GUARDRAIL CHECK
+```{r making sure all the data has the expected quality before moving to analysis}
 
+
+# Final participant-level integrity check
+stopifnot(
+  nrow(clean_w_predictors) ==
+    n_distinct(clean_w_predictors$internal_id),
+
+  all(clean_w_predictors$child_age_years >= 3 &
+      clean_w_predictors$child_age_years < 9),
+
+  !anyNA(clean_w_predictors$internal_id)
+)
+
+
+
+```
+
+
+Language specific analyses
 ```{r correlation analyses language specific}
 
 
@@ -1069,22 +1094,6 @@ corrplot(
   tl.col = "black",
   tl.srt = 45,
 )
-
-
-
-
-
-
-
-
-
-
-
-
-```
-
-```{r visualizations}
-
 
 
 extract_outcome_cor <- function(cor_matrix, outcome_var, language_group, outcome_label) {
@@ -1306,6 +1315,10 @@ ggsave(
   dpi = 600,
   bg = "white"
 )
+
+
+
+
 
 
 
@@ -1640,13 +1653,7 @@ matching_societal <- lmer(
 )
 
 summary(matching_societal)
-#exposure, age and speaker rate is marginal
 
-#b. Do ANOVAS between base and societal level layers
-
-anova(active_base, active_societal) #no difference, better fit with base model
-
-anova(matching_base, matching_societal) #marginal difference, slightly better fit for the societal in AIC but not BIC
 
 # ============================================================
 # 2. build family layer predictor models and compare to base model
@@ -1715,18 +1722,16 @@ summary(matching_family)
 
 #anovas between base, societal, and family models
 
-anova(active_base, active_societal, active_family) #family significantly better than societal
-anova(matching_base, matching_societal, matching_family) #family marginally better than societal
-anova(matching_base, matching_family) #family significantly better than base
+anova(active_societal, active_both_layers) 
+anova(active_family, active_both_layers) 
+anova(matching_societal, matching_both_layers) 
 anova(matching_family, matching_both_layers)
+
 
 # ============================================================
 #Let's make a publication ready table of the active use results
 
 
-library(modelsummary)
-library(flextable)
-library(performance)
 
 # Models in the desired order
 models_active <- list(
@@ -1982,12 +1987,6 @@ save_as_docx(
 # RUN INTERACTION MODELS
 # ============================================================
 
-library(tidyverse)
-library(patchwork)
-library(lme4)
-library(lmerTest)
-library(dplyr)
-library(tidyr)
 
 # ------------------------------------------------------------
 # 1. Prepare data
@@ -2140,10 +2139,6 @@ sapply(
 
 
 
-
-library(broom.mixed)
-library(dplyr)
-library(tidyr)
 
 interaction_results <- bind_rows(
   broom.mixed::tidy(
@@ -2651,7 +2646,7 @@ ggsave(
 
 ```
 
-```{r linear exploratory heritage models}
+```{r linear exploratory language status models}
 
 
 
@@ -2756,11 +2751,6 @@ sapply(
   nobs
 )
 
-
-
-library(modelsummary)
-library(flextable)
-library(officer)
 
 # ============================================================
 # 1. Define predictor labels and order
@@ -2877,8 +2867,8 @@ save_as_docx(
 
 ```
 
-
-```{r statistical analyses language agnostic}
+Language agnostic analyses
+```{r correlation analyses language agnostic}
 
 #pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
 #For the matrix at least run each concern and attitude separate.
@@ -2893,6 +2883,10 @@ lang_agnostic_outcomes<- clean_w_predictors %>%
 
 #making a binary measure of degree of activeness where all the languages must be at or above a score of 2 to receive 1, otherwise they receive 0.
 
+# ============================================================
+# 1. Create binary outcomes
+# ============================================================
+
 lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
   mutate(
     degree_of_activeness_combined = as.integer(
@@ -2900,17 +2894,45 @@ lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
         ends_with("_active_use_category"),
         ~ is.na(.x) | .x >= 2
       )
-    )
-  ) %>%
-#making a binary measure of language matching where all the languages must be at or above a score of 50% to receive 1, otherwise they receive 0.
-  mutate(
+    ),
+
     language_matching_combined = as.integer(
       if_all(
         ends_with("_interlocutor_matching"),
         ~ is.na(.x) | .x >= 50
       )
     )
-  ) 
+  )
+
+
+# ============================================================
+# 2. VALIDATION: Missing outcome data
+# ============================================================
+
+outcome_missingness <- lang_agnostic_outcomes %>%
+  mutate(
+    n_active_scores = rowSums(
+      !is.na(pick(ends_with("_active_use_category")))
+    ),
+    n_matching_scores = rowSums(
+      !is.na(pick(ends_with("_interlocutor_matching")))
+    )
+  )
+
+# Summarize missing outcomes
+outcome_missingness %>%
+  summarise(
+    n_children = n(),
+    no_active_scores = sum(n_active_scores == 0),
+    no_matching_scores = sum(n_matching_scores == 0)
+  )
+
+# Stop if any child has no available scores
+stopifnot(
+  all(outcome_missingness$n_active_scores > 0),
+  all(outcome_missingness$n_matching_scores > 0)
+)
+
 
 lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
   select(internal_id, language_matching_combined, degree_of_activeness_combined)
@@ -2929,65 +2951,38 @@ for_agnostic_correlation <- for_agnostic_correlation %>%
   mutate(across(everything(), as.numeric))
 
 
-# 
-# language_agnostic_correlation <- cor(
-#  for_agnostic_correlation,
-#   use = "pairwise.complete.obs",
-#   method = "spearman"
-# )
-#  library(psych)
-# 
-# language_agnostic_correlation<- psych::corr.test(
-#   language_agnostic_correlation,
-#   method = "spearman",
-#   use = "pairwise",
-#   adjust = "none"
-# )
-# 
-# 
-# # Significance at p < .05
-# agnostic_significant_correlations <- language_agnostic_correlation$p < 0.05
-# 
-# agnostic_significant_correlations
-# 
-# 
-# corrplot(
-#   language_agnostic_correlation,
-#   method = "circle",
-#   type = "upper",
-#   diag = TRUE,
-#   tl.col = "black",
-#   tl.srt = 45,
-# )
 
-
-#=====================================================
-#logistic regressions 
+language_agnostic_correlation <- cor(
+ for_agnostic_correlation,
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
 
 
 
+language_agnostic_correlation_TEST <- psych::corr.test(
+  for_agnostic_correlation,
+  method = "spearman",
+  use = "pairwise",
+  adjust = "none"
+)
 
 
+# Significance at p < .05
+agnostic_significant_correlations_TEST <- language_agnostic_correlation_TEST$p < 0.05
+
+agnostic_significant_correlations_TEST
+
+corrplot(
+  language_agnostic_correlation,
+  method = "circle",
+  type = "upper",
+  diag = TRUE,
+  tl.col = "black",
+  tl.srt = 45,
+)
 
 
-
-
-
-
-
-
-
-
-#run the aoa as a factor in an exploratory fashion
-
-#attitudes model 
-#active_use~child_age+multiliningualism_rate+attitudes+concerns
-
-#Anova between base and attidues models.
-
-
-#Viz: active use y axis, multilingualism rate. confidence interval. Run it smooth too to check if it's linear, with the data points also.
-#histograms, and diagnostic plots.
 
 
 ```
@@ -3341,11 +3336,1896 @@ anova_log_flex
 
 ```
 
+
+```{r fixed exploratory}
+
+# ============================================================
+# EXPLORATORY ANALYSES:
+# COMMUNITY VS HERITAGE LANGUAGES BELOW THRESHOLD
+#
+# Outcomes:
+# 1. Active language use
+# 2. Interlocutor matching
+#
+# Groups:
+# 1. Community-Heritage bilinguals: Exact paired McNemar
+# 2. Trilinguals+: Binomial GLMM
+#
+# Includes figure, statistical tests, and audit checks
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(lme4)
+library(broom.mixed)
+
+
+# ============================================================
+# 1. DEFINE THRESHOLDS
+# ============================================================
+
+ACTIVE_THRESHOLD <- 2
+MATCHING_THRESHOLD <- 50
+
+
+# ============================================================
+# 2. CLASSIFY CHILDREN INTO LANGUAGE GROUPS
+# ============================================================
+# Use the cleaned language-level dataset.
+# This avoids counting "Non" or empty language slots.
+
+language_groups <- model_data_long %>%
+  distinct(internal_id, language, language_type) %>%
+  group_by(internal_id) %>%
+  summarise(
+    n_languages = n(),
+    n_community = sum(language_type == "Community"),
+    n_heritage = sum(language_type == "Heritage"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    language_group = case_when(
+      n_languages >= 3 ~ "Trilinguals+",
+
+      n_languages == 2 & n_community == 2 ~
+        "Community bilinguals",
+
+      n_languages == 2 &
+        n_community == 1 &
+        n_heritage == 1 ~
+        "Community–Heritage bilinguals",
+
+      TRUE ~ NA_character_
+    ),
+
+    language_group = factor(
+      language_group,
+      levels = c(
+        "Community bilinguals",
+        "Community–Heritage bilinguals",
+        "Trilinguals+"
+      )
+    )
+  )
+
+# Check group sizes
+print(language_groups %>% count(language_group))
+
+# Verify no missing classifications or duplicate IDs
+stopifnot(
+  !anyNA(language_groups$language_group),
+  !anyDuplicated(language_groups$internal_id),
+  nrow(language_groups) ==
+    n_distinct(model_data_long$internal_id)
+)
+
+# Verify previously misclassified child
+stopifnot(
+  as.character(
+    language_groups$language_group[
+      language_groups$internal_id == 39976965
+    ]
+  ) == "Community–Heritage bilinguals"
+)
+
+
+# ============================================================
+# 3. PREPARE LANGUAGE-LEVEL THRESHOLD DATA
+# ============================================================
+
+threshold_plot_data <- model_data_long %>%
+  left_join(
+    language_groups %>%
+      select(internal_id, language_group),
+    by = "internal_id",
+    relationship = "many-to-one"
+  ) %>%
+  mutate(
+    language_type = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    ),
+
+    below_activeness = case_when(
+      is.na(active_use) ~ NA_integer_,
+      active_use < ACTIVE_THRESHOLD ~ 1L,
+      TRUE ~ 0L
+    ),
+
+    below_matching = case_when(
+      is.na(interlocutor_matching) ~ NA_integer_,
+      interlocutor_matching < MATCHING_THRESHOLD ~ 1L,
+      TRUE ~ 0L
+    )
+  ) %>%
+  filter(
+    language_group %in% c(
+      "Community–Heritage bilinguals",
+      "Trilinguals+"
+    )
+  ) %>%
+  droplevels()
+
+
+# ============================================================
+# 4. SUMMARIZE PERCENTAGES BELOW THRESHOLD
+# ============================================================
+
+activeness_summary <- threshold_plot_data %>%
+  filter(!is.na(below_activeness)) %>%
+  group_by(language_group, language_type) %>%
+  summarise(
+    n_languages = n(),
+    n_below = sum(below_activeness),
+    percent_below = 100 * mean(below_activeness),
+    .groups = "drop"
+  ) %>%
+  mutate(outcome_metric = "Active language use")
+
+matching_summary <- threshold_plot_data %>%
+  filter(!is.na(below_matching)) %>%
+  group_by(language_group, language_type) %>%
+  summarise(
+    n_languages = n(),
+    n_below = sum(below_matching),
+    percent_below = 100 * mean(below_matching),
+    .groups = "drop"
+  ) %>%
+  mutate(outcome_metric = "Interlocutor matching")
+
+threshold_summary <- bind_rows(
+  activeness_summary,
+  matching_summary
+) %>%
+  mutate(
+    outcome_metric = factor(
+      outcome_metric,
+      levels = c(
+        "Active language use",
+        "Interlocutor matching"
+      )
+    ),
+
+    language_group = factor(
+      language_group,
+      levels = c(
+        "Community–Heritage bilinguals",
+        "Trilinguals+"
+      )
+    )
+  )
+
+print(threshold_summary)
+
+
+# ============================================================
+# 5. FIGURE: LANGUAGES BELOW THRESHOLD
+# ============================================================
+
+threshold_figure <- ggplot(
+  threshold_summary,
+  aes(
+    x = language_type,
+    y = percent_below,
+    fill = language_type
+  )
+) +
+  geom_col(width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(percent_below, 1), "%")),
+    vjust = -0.4,
+    size = 4.3
+  ) +
+  facet_grid(
+    outcome_metric ~ language_group
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Community" = "#8DAEE1",
+      "Heritage" = "#B0DA87"
+    ),
+    drop = FALSE
+  ) +
+  scale_y_continuous(
+    limits = c(0, 110),
+    breaks = seq(0, 100, 20),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    x = NULL,
+    y = "Languages below threshold (%)",
+    fill = "Language type",
+    title = "Language status and below-threshold outcomes"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(
+      size = 13,
+      face = "bold"
+    ),
+    axis.text.x = element_text(size = 12)
+  )
+
+print(threshold_figure)
+
+ggsave(
+  "Figure_below_threshold_by_status_and_outcome.pdf",
+  threshold_figure,
+  width = 8.5,
+  height = 7,
+  bg = "white"
+)
+
+
+# ============================================================
+# 6. PREPARE LONG DATA FOR STATISTICAL TESTS
+# ============================================================
+
+threshold_test_data <- threshold_plot_data %>%
+  select(
+    internal_id,
+    language,
+    language_group,
+    language_type,
+    below_activeness,
+    below_matching
+  ) %>%
+  pivot_longer(
+    cols = c(below_activeness, below_matching),
+    names_to = "outcome_metric",
+    values_to = "below_threshold"
+  ) %>%
+  mutate(
+    outcome_metric = dplyr::recode(
+      outcome_metric,
+      below_activeness = "Active language use",
+      below_matching = "Interlocutor matching"
+    ),
+    below_threshold = as.integer(below_threshold)
+  ) %>%
+  filter(!is.na(below_threshold)) %>%
+  droplevels()
+
+# Check that no child-language-outcome is duplicated
+duplicates <- threshold_test_data %>%
+  count(internal_id, language, outcome_metric) %>%
+  filter(n > 1)
+
+stopifnot(nrow(duplicates) == 0)
+
+# Verify threshold coding
+stopifnot(
+  all(
+    threshold_plot_data$below_activeness[
+      !is.na(threshold_plot_data$active_use)
+    ] ==
+      as.integer(
+        threshold_plot_data$active_use[
+          !is.na(threshold_plot_data$active_use)
+        ] < ACTIVE_THRESHOLD
+      )
+  ),
+
+  all(
+    threshold_plot_data$below_matching[
+      !is.na(threshold_plot_data$interlocutor_matching)
+    ] ==
+      as.integer(
+        threshold_plot_data$interlocutor_matching[
+          !is.na(threshold_plot_data$interlocutor_matching)
+        ] < MATCHING_THRESHOLD
+      )
+  )
+)
+
+
+# ============================================================
+# 7. VERIFY FIGURE AND TEST DATA AGREE
+# ============================================================
+
+summary_from_tests <- threshold_test_data %>%
+  group_by(
+    outcome_metric,
+    language_group,
+    language_type
+  ) %>%
+  summarise(
+    n_languages_check = n(),
+    n_below_check = sum(below_threshold),
+    .groups = "drop"
+  )
+
+figure_check <- threshold_summary %>%
+  left_join(
+    summary_from_tests,
+    by = c(
+      "outcome_metric",
+      "language_group",
+      "language_type"
+    )
+  ) %>%
+  filter(
+    is.na(n_languages_check) |
+      n_languages != n_languages_check |
+      n_below != n_below_check
+  )
+
+stopifnot(nrow(figure_check) == 0)
+
+cat("\nFigure and statistical test data agree.\n")
+
+
+# ============================================================
+# 8. COMMUNITY-HERITAGE BILINGUALS
+# EXACT PAIRED MCNEMAR TESTS
+# ============================================================
+
+bilingual_data <- threshold_test_data %>%
+  filter(
+    language_group == "Community–Heritage bilinguals"
+  )
+
+# One observation per child, type, and outcome
+bilingual_duplicates <- bilingual_data %>%
+  count(
+    internal_id,
+    outcome_metric,
+    language_type
+  ) %>%
+  filter(n > 1)
+
+stopifnot(nrow(bilingual_duplicates) == 0)
+
+# Create one row per child per outcome
+bilingual_paired <- bilingual_data %>%
+  select(
+    internal_id,
+    outcome_metric,
+    language_type,
+    below_threshold
+  ) %>%
+  pivot_wider(
+    names_from = language_type,
+    values_from = below_threshold
+  ) %>%
+  filter(
+    !is.na(Community),
+    !is.na(Heritage)
+  )
+
+# Check paired sample sizes
+print(
+  bilingual_paired %>%
+    count(outcome_metric, name = "N_paired_children")
+)
+
+
+# ------------------------------------------------------------
+# Exact paired comparison function
+# ------------------------------------------------------------
+
+run_paired_test <- function(data, outcome_name) {
+
+  dat <- data %>%
+    filter(outcome_metric == outcome_name)
+
+  paired_table <- table(
+    Community = factor(dat$Community, levels = c(0, 1)),
+    Heritage = factor(dat$Heritage, levels = c(0, 1))
+  )
+
+  cat("\n====================================\n")
+  cat("PAIRED TEST:", outcome_name, "\n")
+  cat("====================================\n")
+
+  print(paired_table)
+
+  # Heritage below, Community above
+  b <- sum(
+    dat$Community == 0 &
+      dat$Heritage == 1
+  )
+
+  # Community below, Heritage above
+  c <- sum(
+    dat$Community == 1 &
+      dat$Heritage == 0
+  )
+
+  if (b + c > 0) {
+    result <- binom.test(
+      x = b,
+      n = b + c,
+      p = 0.5
+    )
+    p_value <- result$p.value
+  } else {
+    p_value <- 1
+  }
+
+  tibble(
+    Outcome = outcome_name,
+    N_children = nrow(dat),
+    Heritage_below_Community_above = b,
+    Community_below_Heritage_above = c,
+    Discordant_pairs = b + c,
+    p_value = p_value
+  )
+}
+
+bilingual_results <- purrr::map_dfr(
+  c("Active language use", "Interlocutor matching"),
+  ~ run_paired_test(bilingual_paired, .x)
+)
+
+print(bilingual_results)
+
+
+# ============================================================
+# 9. TRILINGUALS+
+# BINOMIAL MIXED-EFFECTS MODELS
+# ============================================================
+
+trilingual_data <- threshold_test_data %>%
+  filter(language_group == "Trilinguals+") %>%
+  droplevels()
+
+# Descriptive checks
+trilingual_summary <- trilingual_data %>%
+  group_by(outcome_metric, language_type) %>%
+  summarise(
+    N_languages = n(),
+    N_children = n_distinct(internal_id),
+    N_below = sum(below_threshold),
+    Percent_below = 100 * mean(below_threshold),
+    .groups = "drop"
+  )
+
+print(trilingual_summary)
+
+
+# ------------------------------------------------------------
+# Function: GLMM by outcome
+# ------------------------------------------------------------
+
+run_trilingual_model <- function(data, outcome_name) {
+
+  dat <- data %>%
+    filter(outcome_metric == outcome_name) %>%
+    droplevels()
+
+  cat("\n====================================\n")
+  cat("TRILINGUAL MODEL:", outcome_name, "\n")
+  cat("====================================\n")
+
+  cat("Observations:", nrow(dat), "\n")
+  cat("Children:", n_distinct(dat$internal_id), "\n")
+
+  null_model <- glmer(
+    below_threshold ~ 1 + (1 | internal_id),
+    data = dat,
+    family = binomial,
+    control = glmerControl(optimizer = "bobyqa")
+  )
+
+  language_model <- glmer(
+    below_threshold ~ language_type + (1 | internal_id),
+    data = dat,
+    family = binomial,
+    control = glmerControl(optimizer = "bobyqa")
+  )
+
+  comparison <- anova(
+    null_model,
+    language_model,
+    test = "Chisq"
+  )
+
+  odds_ratios <- broom.mixed::tidy(
+    language_model,
+    effects = "fixed",
+    conf.int = TRUE,
+    conf.method = "Wald",
+    exponentiate = TRUE
+  )
+
+  singular <- lme4::isSingular(language_model)
+
+  convergence_messages <-
+    language_model@optinfo$conv$lme4$messages
+
+  cat("\nMODEL COMPARISON\n")
+  print(comparison)
+
+  cat("\nMODEL COEFFICIENTS\n")
+  print(summary(language_model))
+
+  cat("\nODDS RATIOS\n")
+  print(odds_ratios)
+
+  cat("\nMODEL DIAGNOSTICS\n")
+  cat("Singular:", singular, "\n")
+
+  if (length(convergence_messages) > 0) {
+    print(convergence_messages)
+  } else {
+    cat("No convergence warnings.\n")
+  }
+
+  print(VarCorr(language_model))
+
+  list(
+    null_model = null_model,
+    language_model = language_model,
+    comparison = comparison,
+    odds_ratios = odds_ratios,
+    singular = singular,
+    convergence_messages = convergence_messages
+  )
+}
+
+
+# ============================================================
+# 10. RUN TRILINGUAL MODELS
+# ============================================================
+
+trilingual_active <- run_trilingual_model(
+  trilingual_data,
+  "Active language use"
+)
+
+trilingual_matching <- run_trilingual_model(
+  trilingual_data,
+  "Interlocutor matching"
+)
+
+
+# ============================================================
+# 11. EXTRACT RESULTS FOR REPORTING
+# ============================================================
+
+trilingual_results <- bind_rows(
+  trilingual_active$odds_ratios %>%
+    mutate(Outcome = "Active language use"),
+
+  trilingual_matching$odds_ratios %>%
+    mutate(Outcome = "Interlocutor matching")
+) %>%
+  filter(term == "language_typeHeritage") %>%
+  select(
+    Outcome,
+    term,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value
+  )
+
+cat("\n====================================\n")
+cat("FINAL PAIRED COMPARISONS\n")
+cat("====================================\n")
+print(bilingual_results)
+
+cat("\n====================================\n")
+cat("FINAL TRILINGUAL ODDS RATIOS\n")
+cat("====================================\n")
+print(trilingual_results)
+
+
+# ============================================================
+# 12. FINAL AUDIT CHECKS
+# ============================================================
+
+# Confirm groups agree with the source classification
+classification_check <- threshold_plot_data %>%
+  distinct(internal_id, language_group) %>%
+  left_join(
+    language_groups %>%
+      select(
+        internal_id,
+        current_group = language_group
+      ),
+    by = "internal_id"
+  ) %>%
+  filter(
+    as.character(language_group) !=
+      as.character(current_group) |
+      is.na(current_group)
+  )
+
+stopifnot(nrow(classification_check) == 0)
+
+# Confirm number of children and observations
+final_sample_check <- threshold_test_data %>%
+  group_by(outcome_metric, language_group) %>%
+  summarise(
+    N_children = n_distinct(internal_id),
+    N_languages = n(),
+    .groups = "drop"
+  )
+
+print(final_sample_check)
+
+cat("\n====================================\n")
+cat("EXPLORATORY ANALYSIS AUDIT COMPLETED\n")
+cat("====================================\n")
+cat("No duplicate child-language-outcome rows.\n")
+cat("Language classifications are consistent.\n")
+cat("Figure and statistical test summaries agree.\n")
+cat("Check GLMM singularity and warnings above.\n")
+
+
+
+
+# ============================================================
+# SENSITIVITY: Singular trilingual active-use GLMM
+# Logistic regression with child-cluster-robust SEs
+# ============================================================
+
+library(dplyr)
+library(sandwich)
+library(lmtest)
+
+tri_active_data <- trilingual_data %>%
+  filter(outcome_metric == "Active language use") %>%
+  droplevels()
+
+# Fit ordinary logistic regression
+tri_active_glm <- glm(
+  below_threshold ~ language_type,
+  data = tri_active_data,
+  family = binomial
+)
+
+# Cluster-robust covariance matrix
+cluster_vcov <- sandwich::vcovCL(
+  tri_active_glm,
+  cluster = tri_active_data$internal_id,
+  type = "HC1"
+)
+
+# Cluster-robust coefficient tests
+lmtest::coeftest(
+  tri_active_glm,
+  vcov. = cluster_vcov,
+  df = n_distinct(tri_active_data$internal_id) - 1
+)
+
+# Odds ratio and cluster-robust 95% CI
+estimate <- coef(tri_active_glm)["language_typeHeritage"]
+
+robust_se <- sqrt(
+  diag(cluster_vcov)
+)["language_typeHeritage"]
+
+critical_value <- qt(
+  0.975,
+  df = n_distinct(tri_active_data$internal_id) - 1
+)
+
+data.frame(
+  predictor = "Heritage vs Community",
+  OR = exp(estimate),
+  CI_lower = exp(
+    estimate - critical_value * robust_se
+  ),
+  CI_upper = exp(
+    estimate + critical_value * robust_se
+  )
+)
+
+
+
+
+```
+
+```{r exploratory language status analyses}
+# #==========================
+# #Binary outcome distributions
+# 
+# 
+# #
+# # ============================================================
+# # STEP 1: Identify each child's language group
+# # ============================================================
+# 
+# language_groups <- clean_w_predictors %>%
+#   select(
+#     internal_id,
+#     child_english,
+#     child_french,
+#     child_first_minority,
+#     child_second_minority,
+#     child_third_minority
+#   ) %>%
+#   distinct(internal_id, .keep_all = TRUE) %>%
+#   pivot_longer(
+#     cols = -internal_id,
+#     names_to = "language_source",
+#     values_to = "language"
+#   ) %>%
+#   mutate(
+#     language = str_squish(as.character(language)),
+#     language = case_when(
+#       str_to_lower(language) %in%
+#         c("english", "anglais") ~ "English",
+# 
+#       str_to_lower(language) %in%
+#         c("french", "français", "francais") ~ "French",
+# 
+#       TRUE ~ language
+#     )
+#   ) %>%
+#   filter(
+#     !is.na(language),
+#     language != ""
+#   ) %>%
+#   distinct(internal_id, language) %>%
+#   group_by(internal_id) %>%
+#   summarise(
+#     n_languages = n(),
+#     has_french = any(language == "French"),
+#     has_english = any(language == "English"),
+#     n_heritage = sum(
+#       !language %in% c("French", "English")
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     language_group = case_when(
+#       n_languages >= 3 ~ "Trilinguals+",
+# 
+#       n_languages == 2 &
+#         has_french & has_english ~
+#         "Community bilinguals",
+# 
+#       n_languages == 2 &
+#         n_heritage == 1 ~
+#         "Community–Heritage bilinguals",
+# 
+#       TRUE ~ NA_character_
+#     ),
+# 
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community bilinguals",
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# # Check group sizes
+# language_groups %>%
+#   count(language_group)
+# 
+# # 
+# # # cOMMENTED OUT, WE DECIDED NOT TO USE THESE ANALYSES SINCE THEY ARE OUT OF THE SCOPE OF WHAT WE WANTED TO KNOW FOR LANGUAGE STATUS
+# # # ============================================================
+# # # STEP 2: Join language groups to binary outcome
+# # # ============================================================
+# # 
+# # binary_plot_data <- child_data %>%
+# #   select(
+# #     internal_id,
+# #     degree_of_activeness_combined
+# #   ) %>%
+# #   left_join(
+# #     language_groups %>%
+# #       select(internal_id, language_group),
+# #     by = "internal_id"
+# #   )
+# # 
+# # # Check for missing classifications
+# # binary_plot_data %>%
+# #   count(
+# #     language_group,
+# #     degree_of_activeness_combined
+# #   )
+# # 
+# # 
+# # # ============================================================
+# # # STEP 3: Calculate group composition for 0 and 1
+# # # ============================================================
+# # 
+# # binary_distribution <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(degree_of_activeness_combined),
+# #     !is.na(language_group)
+# #   ) %>%
+# #   count(
+# #     degree_of_activeness_combined,
+# #     language_group,
+# #     name = "n"
+# #   ) %>%
+# #   group_by(degree_of_activeness_combined) %>%
+# #   mutate(
+# #     percentage = 100 * n / sum(n)
+# #   ) %>%
+# #   ungroup()
+# # 
+# # binary_distribution
+# # 
+# # 
+# # # ============================================================
+# # # STEP 4: 100% stacked bar chart
+# # # ============================================================
+# # 
+# # binary_figure <- ggplot(
+# #   binary_distribution,
+# #   aes(
+# #     x = factor(
+# #       degree_of_activeness_combined,
+# #       levels = c(0, 1),
+# #       labels = c("Score 0", "Score 1")
+# #     ),
+# #     y = percentage,
+# #     fill = language_group
+# #   )
+# # ) +
+# #   geom_col(
+# #     width = 0.65,
+# #     color = "white",
+# #     linewidth = 0.5
+# #   ) +
+# #   geom_text(
+# #     aes(
+# #       label = if_else(
+# #         percentage >= 5,
+# #         paste0(round(percentage, 1), "%"),
+# #         ""
+# #       )
+# #     ),
+# #     position = position_stack(vjust = 0.5),
+# #     size = 4.5
+# #   ) +
+# #   coord_flip() +
+# #   scale_fill_manual(
+# #     values = c(
+# #       "Community bilinguals" = "#8DAEE1",
+# #       "Community–Heritage bilinguals" = "#B0DA87",
+# #       "Trilinguals+" = "#FAE0BD"
+# #     )
+# #   ) +
+# #   scale_y_continuous(
+# #     limits = c(0, 100),
+# #     breaks = seq(0, 100, 20),
+# #     labels = function(x) paste0(x, "%"),
+# #     expand = c(0, 0)
+# #   ) +
+# #   labs(
+# #     x = NULL,
+# #     y = "Percentage of children",
+# #     fill = "Language group",
+# #     title = "Language profiles by combined activeness score"
+# #   ) +
+# #   theme_classic(base_size = 15) +
+# #   theme(
+# #     plot.title = element_text(
+# #       face = "bold",
+# #       size = 16
+# #     ),
+# #     legend.position = "bottom",
+# #     legend.title = element_blank(),
+# #     legend.text = element_text(size = 12),
+# #     axis.text = element_text(size = 13)
+# #   )
+# # 
+# # binary_figure
+# # 
+# # ggsave(
+# #   "Figure_binary_activeness_language_groups.pdf",
+# #   binary_figure,
+# #   width = 7.2,
+# #   height = 4.5,
+# #   bg = "white"
+# # )
+# # 
+# # 
+# # binary_by_group <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(degree_of_activeness_combined),
+# #     !is.na(language_group)
+# #   ) %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     N = n(),
+# #     n_score_1 = sum(degree_of_activeness_combined == 1),
+# #     percent_score_1 = 100 * mean(
+# #       degree_of_activeness_combined == 1
+# #     ),
+# #     .groups = "drop"
+# #   )
+# # 
+# # binary_by_group
+# # 
+# # 
+# # #Let's do a chi-square test of independence to see if thecategories of children who score 1 in the binary score are distributed the same way they are in our sample 
+# # 
+# # 
+# # 
+# # # Create contingency table
+# # activeness_table <- table(
+# #   binary_plot_data$language_group,
+# #   binary_plot_data$degree_of_activeness_combined
+# # )
+# # 
+# # activeness_table
+# # 
+# # # Pearson chi-square test
+# # chi_result <- chisq.test(
+# #   activeness_table,
+# #   correct = FALSE
+# # )
+# # 
+# # chi_result
+# # 
+# # # Check expected frequencies
+# # chi_result$expected
+# # 
+# # # Standardized Pearson residuals
+# # chi_result$stdres
+# # 
+# # # Cramer's V
+# # cramers_v <- sqrt(
+# #   unname(chi_result$statistic) /
+# #     (sum(activeness_table) *
+# #        min(dim(activeness_table) - 1))
+# # )
+# # 
+# # cramers_v
+# # 
+# # 
+# # 
+# # # Summarize binary outcome by language group
+# # pairwise_data <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(degree_of_activeness_combined)
+# #   ) %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     n_score_1 = sum(degree_of_activeness_combined == 1),
+# #     N = n(),
+# #     .groups = "drop"
+# #   )
+# # 
+# # # Pairwise comparisons of proportions
+# # pairwise_result <- pairwise.prop.test(
+# #   x = pairwise_data$n_score_1,
+# #   n = pairwise_data$N,
+# #   p.adjust.method = "holm"
+# # )
+# # 
+# # pairwise_result
+# # 
+# # 
+# # #Let's then also make a sensitivity analyses that does not punish trilingual children making them harder to achieve the score of 1 because they have to surpass the threshold for more languages
+# # 
+# # # ============================================================
+# # # STEP 1: Calculate proportion of active languages per child
+# # # ============================================================
+# # 
+# # child_activeness <- model_data_long %>%
+# #   group_by(internal_id) %>%
+# #   summarise(
+# #     n_languages = n(),
+# #     n_valid = sum(!is.na(active_use)),
+# # 
+# #     n_active = sum(
+# #       active_use >= 2,
+# #       na.rm = TRUE
+# #     ),
+# # 
+# #     proportion_active = if_else(
+# #       n_valid > 0,
+# #       n_active / n_valid,
+# #       NA_real_
+# #     ),
+# # 
+# #     .groups = "drop"
+# #   )
+# # 
+# # # Join language group classifications
+# # sensitivity_data <- child_activeness %>%
+# #   left_join(
+# #     language_groups %>%
+# #       select(internal_id, language_group),
+# #     by = "internal_id"
+# #   )
+# # 
+# # # Check results
+# # sensitivity_data %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     N = n(),
+# #     Mean_proportion = mean(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     SD = sd(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     Median = median(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     .groups = "drop"
+# #   )
+# # 
+# # 
+# # 
+# # # ============================================================
+# # # STEP 2: Visualize proportions across language groups
+# # # ============================================================
+# # 
+# # sensitivity_plot <- sensitivity_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(proportion_active)
+# #   ) %>%
+# #   ggplot(
+# #     aes(
+# #       x = language_group,
+# #       y = proportion_active,
+# #       fill = language_group
+# #     )
+# #   ) +
+# #   geom_jitter(
+# #     width = 0.15,
+# #     height = 0,
+# #     alpha = 0.35,
+# #     size = 2,
+# #     shape = 21
+# #   ) +
+# #   stat_summary(
+# #     fun = mean,
+# #     geom = "point",
+# #     shape = 23,
+# #     size = 4,
+# #     fill = "white",
+# #     color = "black"
+# #   ) +
+# #   scale_fill_manual(
+# #     values = c(
+# #       "Community bilinguals" = "#8DAEE1",
+# #       "Community–Heritage bilinguals" = "#B0DA87",
+# #       "Trilinguals+" = "#FAE0BD"
+# #     )
+# #   ) +
+# #   scale_y_continuous(
+# #     labels = scales::percent,
+# #     limits = c(0, 1)
+# #   ) +
+# #   labs(
+# #     x = NULL,
+# #     y = "Proportion of languages meeting activeness criterion",
+# #     title = "Sensitivity analysis: Proportion of active languages"
+# #   ) +
+# #   theme_classic(base_size = 14) +
+# #   theme(
+# #     legend.position = "none",
+# #     axis.text.x = element_text(
+# #       angle = 15,
+# #       hjust = 1
+# #     )
+# #   )
+# # 
+# # sensitivity_plot
+# # 
+# # 
+# # 
+# # # ============================================================
+# # # STEP 3: Kruskal-Wallis test
+# # # ============================================================
+# # 
+# # sensitivity_complete <- sensitivity_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(proportion_active)
+# #   )
+# # 
+# # kruskal_result <- kruskal.test(
+# #   proportion_active ~ language_group,
+# #   data = sensitivity_complete
+# # )
+# # 
+# # kruskal_result
+# # 
+# # 
+# # pairwise.wilcox.test(
+# #   x = sensitivity_complete$proportion_active,
+# #   g = sensitivity_complete$language_group,
+# #   p.adjust.method = "holm",
+# #   exact = FALSE
+# # )
+# # 
+# # 
+# # # ============================================================
+# # # STEP 4: Exploratory binomial regression
+# # # ============================================================
+# # 
+# # binomial_model <- glm(
+# #   cbind(
+# #     n_active,
+# #     n_valid - n_active
+# #   ) ~ language_group,
+# #   data = sensitivity_data %>%
+# #     filter(
+# #       !is.na(language_group),
+# #       n_valid > 0
+# #     ),
+# #   family = binomial
+# # )
+# # 
+# # summary(binomial_model)
+# # 
+# # # Omnibus test of language group
+# # drop1(
+# #   binomial_model,
+# #   test = "Chisq"
+# # )
+# # 
+# # 
+# # #Sensitivity analyses show no differences between groups, meaning that the stringent binary outcome causes the group differences, that is, if children did not have to speak more than two languages, the groups would be comparable, but because some do have to... those children tend to get less classified as 'active users' In other words. It is harder to be an active user when you have to speak three languages.
+# 
+# #Final exploratory analysis. Are some specific languages disproportionately falling below the activeness threshold we set up?
+# 
+# 
+# # ============================================================
+# # FIGURE: COMMUNITY VS HERITAGE LANGUAGE STATUS
+# # FOR LANGUAGES BELOW THRESHOLD
+# # Two rows: Activeness and Interlocutor matching
+# # Two columns: Community–Heritage bilinguals and Trilinguals+
+# # ============================================================
+# 
+# # ------------------------------------------------------------
+# # 1. Set thresholds
+# # ------------------------------------------------------------
+# 
+# ACTIVE_THRESHOLD <- 2
+# MATCHING_THRESHOLD <- 50   # <-- change this if your threshold differs
+# 
+# 
+# # ============================================================
+# # AUDIT: Reconstruct child language groups
+# # ============================================================
+# 
+# library(dplyr)
+# library(tidyr)
+# 
+# language_groups <- model_data_long %>%
+#   distinct(internal_id, language, language_type) %>%
+#   group_by(internal_id) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_community = sum(
+#       language_type == "Community"
+#     ),
+#     n_heritage = sum(
+#       language_type == "Heritage"
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     language_group = case_when(
+#       n_languages >= 3 ~ "Trilinguals+",
+#       n_languages == 2 &
+#         n_community == 1 &
+#         n_heritage == 1 ~
+#           "Community–Heritage bilinguals",
+#       n_languages == 2 &
+#         n_community == 2 ~
+#           "Community bilinguals",
+#       TRUE ~ NA_character_
+#     ),
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community bilinguals",
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# # Inspect classifications and unexpected cases
+# language_groups %>%
+#   count(language_group, n_languages)
+# 
+# language_groups %>%
+#   filter(is.na(language_group))
+# 
+# # Integrity checks
+# stopifnot(
+#   nrow(language_groups) ==
+#     n_distinct(model_data_long$internal_id),
+#   !anyDuplicated(language_groups$internal_id)
+# )
+# 
+# 
+# # ------------------------------------------------------------
+# # 2. Prepare language-level data
+# # ------------------------------------------------------------
+# 
+# threshold_plot_data <- model_data_long %>%
+#   left_join(
+#     language_groups %>%
+#       select(internal_id, language_group),
+#     by = "internal_id"
+#   ) %>%
+#   mutate(
+#     language_type = factor(
+#       as.character(language_type),
+#       levels = c("Community", "Heritage")
+#     ),
+# 
+#     below_activeness = case_when(
+#       is.na(active_use) ~ NA_integer_,
+#       active_use < ACTIVE_THRESHOLD ~ 1L,
+#       active_use >= ACTIVE_THRESHOLD ~ 0L
+#     ),
+# 
+#     below_matching = case_when(
+#       is.na(interlocutor_matching) ~ NA_integer_,
+#       interlocutor_matching < MATCHING_THRESHOLD ~ 1L,
+#       interlocutor_matching >= MATCHING_THRESHOLD ~ 0L
+#     )
+#   ) %>%
+#   filter(
+#     language_group %in% c(
+#       "Community–Heritage bilinguals",
+#       "Trilinguals+"
+#     ),
+#     !is.na(language_group),
+#     !is.na(language_type)
+#   )
+# 
+# # ------------------------------------------------------------
+# # 3. Summarize percentages below threshold for each outcome
+# # ------------------------------------------------------------
+# 
+# activeness_summary <- threshold_plot_data %>%
+#   filter(!is.na(below_activeness)) %>%
+#   group_by(language_group, language_type) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_below = sum(below_activeness == 1),
+#     percent_below = 100 * mean(below_activeness == 1),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     outcome_metric = "Active language use"
+#   )
+# 
+# matching_summary <- threshold_plot_data %>%
+#   filter(!is.na(below_matching)) %>%
+#   group_by(language_group, language_type) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_below = sum(below_matching == 1),
+#     percent_below = 100 * mean(below_matching == 1),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     outcome_metric = "Interlocutor matching"
+#   )
+# 
+# threshold_summary <- bind_rows(
+#   activeness_summary,
+#   matching_summary
+# ) %>%
+#   mutate(
+#     outcome_metric = factor(
+#       outcome_metric,
+#       levels = c(
+#         "Active language use",
+#         "Interlocutor matching"
+#       )
+#     ),
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# threshold_summary
+# 
+# # ------------------------------------------------------------
+# # 4. Plot
+# # ------------------------------------------------------------
+# 
+# threshold_figure <- ggplot(
+#   threshold_summary,
+#   aes(
+#     x = language_type,
+#     y = percent_below,
+#     fill = language_type
+#   )
+# ) +
+#   geom_col(width = 0.6) +
+#   geom_text(
+#     aes(
+#       label = paste0(round(percent_below, 1), "%")
+#     ),
+#     vjust = -0.4,
+#     size = 4.3
+#   ) +
+#   facet_grid(
+#     outcome_metric ~ language_group
+#   ) +
+#   scale_fill_manual(
+#     values = c(
+#       "Community" = "#8DAEE1",
+#       "Heritage" = "#B0DA87"
+#     ),
+#     drop = FALSE
+#   ) +
+#   scale_y_continuous(
+#     limits = c(0, 110),
+#     breaks = seq(0, 100, 20),
+#     labels = function(x) paste0(x, "%")
+#   ) +
+#   labs(
+#     x = NULL,
+#     y = "Languages below threshold (%)",
+#     fill = "Language type",
+#     title = "Language status composition of languages below threshold"
+#   ) +
+#   theme_classic(base_size = 14) +
+#   theme(
+#     legend.position = "bottom",
+#     strip.text = element_text(
+#       size = 13,
+#       face = "bold"
+#     ),
+#     axis.text.x = element_text(size = 12)
+#   )
+# 
+# threshold_figure
+# 
+# # ------------------------------------------------------------
+# # 5. Save
+# # ------------------------------------------------------------
+# 
+# ggsave(
+#   "Figure_below_threshold_by_status_and_outcome.pdf",
+#   threshold_figure,
+#   width = 8.5,
+#   height = 7,
+#   bg = "white"
+# )
+# 
+# 
+# 
+# 
+# 
+# # ============================================================
+# # STATISTICAL TESTS:
+# # COMMUNITY VS HERITAGE LANGUAGES BELOW THRESHOLD
+# #
+# # Outcomes:
+# # 1. Active language use
+# # 2. Interlocutor matching
+# #
+# # Groups:
+# # 1. Community-Heritage bilinguals: Exact McNemar
+# # 2. Trilinguals+: Binomial GLMM
+# # ============================================================
+#  #From code review 
+# 
+# 
+# 
+# 
+# 
+# # ------------------------------------------------------------
+# # 1. Prepare data for both outcomes
+# # ------------------------------------------------------------
+# 
+# threshold_test_data <- threshold_plot_data %>%
+#   select(
+#     internal_id,
+#     language,
+#     language_group,
+#     language_type,
+#     below_activeness,
+#     below_matching
+#   ) %>%
+#   pivot_longer(
+#     cols = c(below_activeness, below_matching),
+#     names_to = "outcome_metric",
+#     values_to = "below_threshold"
+#   ) %>%
+#   mutate(
+#     outcome_metric = recode(
+#       outcome_metric,
+#       below_activeness = "Active language use",
+#       below_matching = "Interlocutor matching"
+#     ),
+#     below_threshold = as.integer(below_threshold),
+#     language_type = factor(
+#       language_type,
+#       levels = c("Community", "Heritage")
+#     )
+#   ) %>%
+#   filter(!is.na(below_threshold))
+# 
+# # Check observations for each group and outcome
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     N_languages = n(),
+#     N_children = n_distinct(internal_id),
+#     N_below = sum(below_threshold),
+#     Percent_below = 100 * mean(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# 
+# # ============================================================
+# # 2. COMMUNITY-HERITAGE BILINGUALS
+# # Exact paired McNemar tests
+# # ============================================================
+# 
+# bilingual_data <- threshold_test_data %>%
+#   filter(
+#     language_group == "Community–Heritage bilinguals"
+#   )
+# 
+# # Check that there is no more than one observation
+# # per child, language type, and outcome.
+# 
+# bilingual_duplicates <- bilingual_data %>%
+#   count(
+#     internal_id,
+#     outcome_metric,
+#     language_type
+#   ) %>%
+#   filter(n > 1)
+# 
+# print(bilingual_duplicates)
+# 
+# if (nrow(bilingual_duplicates) > 0) {
+#   stop("Duplicate child-language type observations found.")
+# }
+# 
+# # Create paired dataset:
+# # One row per child per outcome
+# bilingual_paired <- bilingual_data %>%
+#   select(
+#     internal_id,
+#     outcome_metric,
+#     language_type,
+#     below_threshold
+#   ) %>%
+#   pivot_wider(
+#     names_from = language_type,
+#     values_from = below_threshold
+#   ) %>%
+#   filter(
+#     !is.na(Community),
+#     !is.na(Heritage)
+#   )
+# 
+# # Check sample sizes
+# bilingual_paired %>%
+#   count(outcome_metric, name = "N_paired_children")
+# 
+# 
+# 
+# # ============================================================
+# # AUDIT: Exploratory threshold comparisons
+# # ============================================================
+# 
+# # A. Verify threshold coding
+# stopifnot(
+#   all(
+#     threshold_plot_data$below_activeness[
+#       !is.na(threshold_plot_data$active_use)
+#     ] ==
+#       as.integer(
+#         threshold_plot_data$active_use[
+#           !is.na(threshold_plot_data$active_use)
+#         ] < ACTIVE_THRESHOLD
+#       )
+#   ),
+#   all(
+#     threshold_plot_data$below_matching[
+#       !is.na(threshold_plot_data$interlocutor_matching)
+#     ] ==
+#       as.integer(
+#         threshold_plot_data$interlocutor_matching[
+#           !is.na(threshold_plot_data$interlocutor_matching)
+#         ] < MATCHING_THRESHOLD
+#       )
+#   )
+# )
+# 
+# # B. No duplicated child-language-outcome observations
+# duplicates <- threshold_test_data %>%
+#   count(internal_id, language, outcome_metric) %>%
+#   filter(n > 1)
+# 
+# stopifnot(nrow(duplicates) == 0)
+# 
+# # C. Summarize sample sizes and event counts
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     n_children = n_distinct(internal_id),
+#     n_languages = n(),
+#     n_below = sum(below_threshold),
+#     pct_below = round(
+#       100 * mean(below_threshold), 1
+#     ),
+#     .groups = "drop"
+#   )
+# 
+# # D. Verify Community-Heritage bilingual pairs
+# bilingual_data %>%
+#   count(internal_id, outcome_metric) %>%
+#   count(outcome_metric, n, name = "n_children")
+# 
+# bilingual_paired %>%
+#   count(outcome_metric, name = "complete_pairs")
+# 
+# # E. Verify figure summaries agree with test data
+# summary_from_tests <- threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     n_languages_check = n(),
+#     n_below_check = sum(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# threshold_summary %>%
+#   left_join(
+#     summary_from_tests,
+#     by = c(
+#       "outcome_metric",
+#       "language_group",
+#       "language_type"
+#     )
+#   ) %>%
+#   filter(
+#     is.na(n_languages_check) |
+#     n_languages != n_languages_check |
+#     n_below != n_below_check
+#   )
+# 
+# 
+# 
+# 
+# 
+# # ------------------------------------------------------------
+# # Function for exact paired comparisons
+# # ------------------------------------------------------------
+# 
+# run_paired_test <- function(data, outcome_name) {
+# 
+#   dat <- data %>%
+#     filter(outcome_metric == outcome_name)
+# 
+#   # Paired contingency table
+#   paired_table <- table(
+#     Community = factor(
+#       dat$Community,
+#       levels = c(0, 1)
+#     ),
+#     Heritage = factor(
+#       dat$Heritage,
+#       levels = c(0, 1)
+#     )
+#   )
+# 
+#   cat("\n=================================\n")
+#   cat("OUTCOME:", outcome_name, "\n")
+#   cat("=================================\n")
+# 
+#   print(paired_table)
+# 
+#   # Discordant pairs
+#   # 1 = language falls below threshold
+# 
+#   # Heritage below, Community above
+#   b <- sum(
+#     dat$Community == 0 &
+#     dat$Heritage == 1
+#   )
+# 
+#   # Community below, Heritage above
+#   c <- sum(
+#     dat$Community == 1 &
+#     dat$Heritage == 0
+#   )
+# 
+#   cat("\nHeritage below, Community above:", b)
+#   cat("\nCommunity below, Heritage above:", c)
+#   cat("\nTotal discordant pairs:", b + c, "\n")
+# 
+#   # Exact McNemar test
+#   # Computed through exact binomial test
+#   if (b + c > 0) {
+# 
+#     exact_result <- binom.test(
+#       x = b,
+#       n = b + c,
+#       p = 0.5
+#     )
+# 
+#     print(exact_result)
+# 
+#     p_value <- exact_result$p.value
+# 
+#   } else {
+# 
+#     cat("No discordant pairs.\n")
+#     p_value <- 1
+#   }
+# 
+#   tibble(
+#     Outcome = outcome_name,
+#     N_children = nrow(dat),
+#     Heritage_below_Community_above = b,
+#     Community_below_Heritage_above = c,
+#     Discordant_pairs = b + c,
+#     p_value = p_value
+#   )
+# }
+# 
+# # ------------------------------------------------------------
+# # Run test separately for both outcomes
+# # ------------------------------------------------------------
+# 
+# bilingual_results <- map_dfr(
+#   c(
+#     "Active language use",
+#     "Interlocutor matching"
+#   ),
+#   ~ run_paired_test(
+#     bilingual_paired,
+#     .x
+#   )
+# )
+# 
+# bilingual_results
+# 
+# 
+# # ============================================================
+# # 3. TRILINGUALS+
+# # Binomial logistic mixed-effects models
+# # ============================================================
+# 
+# trilingual_data <- threshold_test_data %>%
+#   filter(
+#     language_group == "Trilinguals+"
+#   ) %>%
+#   droplevels()
+# 
+# # Check observations and sample sizes
+# trilingual_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_type
+#   ) %>%
+#   summarise(
+#     N_languages = n(),
+#     N_children = n_distinct(internal_id),
+#     N_below = sum(below_threshold),
+#     Percent_below = 100 * mean(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# 
+# # ------------------------------------------------------------
+# # Function to fit GLMM for each outcome
+# # ------------------------------------------------------------
+# 
+# run_trilingual_model <- function(data, outcome_name) {
+# 
+#   dat <- data %>%
+#     filter(outcome_metric == outcome_name) %>%
+#     droplevels()
+# 
+#   cat("\n=================================\n")
+#   cat("TRILINGUAL MODEL:", outcome_name, "\n")
+#   cat("=================================\n")
+# 
+#   cat("\nObservations:", nrow(dat))
+#   cat("\nChildren:", n_distinct(dat$internal_id), "\n")
+# 
+#   # Null model
+#   null_model <- glmer(
+#     below_threshold ~
+#       1 +
+#       (1 | internal_id),
+#     data = dat,
+#     family = binomial,
+#     control = glmerControl(
+#       optimizer = "bobyqa"
+#     )
+#   )
+# 
+#   # Language type model
+#   language_model <- glmer(
+#     below_threshold ~
+#       language_type +
+#       (1 | internal_id),
+#     data = dat,
+#     family = binomial,
+#     control = glmerControl(
+#       optimizer = "bobyqa"
+#     )
+#   )
+# 
+#   # Likelihood-ratio comparison
+#   comparison <- anova(
+#     null_model,
+#     language_model,
+#     test = "Chisq"
+#   )
+# 
+#   cat("\nMODEL COMPARISON\n")
+#   print(comparison)
+# 
+#   cat("\nMODEL COEFFICIENTS\n")
+#   print(summary(language_model))
+# 
+#   # Odds ratios and 95% Wald CI
+#   odds_ratios <- broom.mixed::tidy(
+#     language_model,
+#     effects = "fixed",
+#     conf.int = TRUE,
+#     conf.method = "Wald",
+#     exponentiate = TRUE
+#   )
+# 
+#   cat("\nODDS RATIOS\n")
+#   print(odds_ratios)
+# 
+#   # Diagnostics
+#   cat("\nMODEL DIAGNOSTICS\n")
+# 
+#   cat("Singular fit:",
+#       isSingular(language_model), "\n")
+# 
+#   cat("Convergence messages:\n")
+#   print(language_model@optinfo$conv$lme4$messages)
+# 
+#   print(VarCorr(language_model))
+# 
+#   # Save all results
+#   list(
+#     null_model = null_model,
+#     language_model = language_model,
+#     comparison = comparison,
+#     odds_ratios = odds_ratios,
+#     singular = isSingular(language_model),
+#     convergence_messages =
+#       language_model@optinfo$conv$lme4$messages
+#   )
+# }
+# 
+# 
+# # ------------------------------------------------------------
+# # Run models for both outcomes
+# # ------------------------------------------------------------
+# 
+# trilingual_active <- run_trilingual_model(
+#   trilingual_data,
+#   "Active language use"
+# )
+# 
+# trilingual_matching <- run_trilingual_model(
+#   trilingual_data,
+#   "Interlocutor matching"
+# )
+# 
+# 
+# # ============================================================
+# # 4. Extract results for reporting
+# # ============================================================
+# 
+# # Paired comparisons
+# bilingual_results
+# 
+# 
+# # Trilingual odds ratios
+# trilingual_results <- bind_rows(
+#   trilingual_active$odds_ratios %>%
+#     mutate(Outcome = "Active language use"),
+# 
+#   trilingual_matching$odds_ratios %>%
+#     mutate(Outcome = "Interlocutor matching")
+# ) %>%
+#   filter(term == "language_typeHeritage") %>%
+#   select(
+#     Outcome,
+#     term,
+#     estimate,
+#     conf.low,
+#     conf.high,
+#     p.value
+#   )
+# 
+# trilingual_results
+# 
+# 
+# # ============================================================
+# # 5. Final checks
+# # ============================================================
+# 
+# # Check duplicate child-language observations
+# threshold_test_data %>%
+#   count(
+#     internal_id,
+#     language,
+#     outcome_metric
+#   ) %>%
+#   filter(n > 1)
+# 
+# # Confirm group sample sizes
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group
+#   ) %>%
+#   summarise(
+#     N_children = n_distinct(internal_id),
+#     N_languages = n(),
+#     .groups = "drop"
+#   )
+# 
+# 
+# 
+# 
+
+
+
+```
+
+Methods information and descriptive statistics
 ```{r methods descriptives}
-
-
-
-
 
 #------------------------------------------
 # GENDER SUMMARY
@@ -3464,7 +5344,7 @@ ggplot(
 # AGE SUMMARY
 #---------------------------------------------------------------
 
-age_summary <- child_level %>%
+age_summary <- clean_w_predictors %>%
   summarise(
     n = sum(!is.na(child_age_years)),
     mean_age = round(mean(child_age_years, na.rm = TRUE), 2),
@@ -4023,18 +5903,12 @@ aoa_long <- clean_w_predictors %>%
 
 ```
 
+
 ```{r predictors tables methods}
 
 
-library(tidyverse)
-library(ggplot2)
-library(flextable)
-library(officer)
-library(patchwork)
-library(scales)
 
-# Replace this if your child-level analysis dataset
-# has a different name.
+
 child_data <- logistic_data %>%
   distinct(internal_id, .keep_all = TRUE)
 
@@ -4407,9 +6281,6 @@ ggsave(
 # Children with Heritage languages
 # ============================================================
 
-library(tidyverse)
-library(ggplot2)
-
 # ------------------------------------------------------------
 # 1. Identify children with Heritage languages
 # ------------------------------------------------------------
@@ -4533,13 +6404,6 @@ heritage_distributions %>%
     .groups = "drop"
   )
 
-
-
-
-library(dplyr)
-library(ggplot2)
-library(patchwork)
-library(scales)
 
 # ============================================================
 # A. Active language use
@@ -4669,891 +6533,317 @@ ggsave(
  
 #For interlocutor matching make the bins smaller like 0-25, 25-50, etc... then like check if haviing the separate bin for 100 makes sense, compare the two graphs.
 
-#==========================
-#Binary outcome distributions
+```
 
 
 
-library(tidyverse)
-library(ggplot2)
-library(scales)
-
-# ============================================================
-# STEP 1: Identify each child's language group
-# ============================================================
-
-language_groups <- clean_w_predictors %>%
-  select(
-    internal_id,
-    child_english,
-    child_french,
-    child_first_minority,
-    child_second_minority,
-    child_third_minority
-  ) %>%
-  distinct(internal_id, .keep_all = TRUE) %>%
-  pivot_longer(
-    cols = -internal_id,
-    names_to = "language_source",
-    values_to = "language"
-  ) %>%
-  mutate(
-    language = str_squish(as.character(language)),
-    language = case_when(
-      str_to_lower(language) %in%
-        c("english", "anglais") ~ "English",
-
-      str_to_lower(language) %in%
-        c("french", "français", "francais") ~ "French",
-
-      TRUE ~ language
-    )
-  ) %>%
-  filter(
-    !is.na(language),
-    language != ""
-  ) %>%
-  distinct(internal_id, language) %>%
-  group_by(internal_id) %>%
-  summarise(
-    n_languages = n(),
-    has_french = any(language == "French"),
-    has_english = any(language == "English"),
-    n_heritage = sum(
-      !language %in% c("French", "English")
-    ),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    language_group = case_when(
-      n_languages >= 3 ~ "Trilinguals+",
-
-      n_languages == 2 &
-        has_french & has_english ~
-        "Community bilinguals",
-
-      n_languages == 2 &
-        n_heritage == 1 ~
-        "Community–Heritage bilinguals",
-
-      TRUE ~ NA_character_
-    ),
-
-    language_group = factor(
-      language_group,
-      levels = c(
-        "Community bilinguals",
-        "Community–Heritage bilinguals",
-        "Trilinguals+"
-      )
-    )
-  )
-
-# Check group sizes
-language_groups %>%
-  count(language_group)
-
+```{r code audit, model diagnostics}
 
 
 # ============================================================
-# STEP 2: Join language groups to binary outcome
+# AUDIT: Main mixed-effects model diagnostics
 # ============================================================
 
-binary_plot_data <- child_data %>%
-  select(
-    internal_id,
-    degree_of_activeness_combined
-  ) %>%
-  left_join(
-    language_groups %>%
-      select(internal_id, language_group),
-    by = "internal_id"
-  )
-
-# Check for missing classifications
-binary_plot_data %>%
-  count(
-    language_group,
-    degree_of_activeness_combined
-  )
-
-
-# ============================================================
-# STEP 3: Calculate group composition for 0 and 1
-# ============================================================
-
-binary_distribution <- binary_plot_data %>%
-  filter(
-    !is.na(degree_of_activeness_combined),
-    !is.na(language_group)
-  ) %>%
-  count(
-    degree_of_activeness_combined,
-    language_group,
-    name = "n"
-  ) %>%
-  group_by(degree_of_activeness_combined) %>%
-  mutate(
-    percentage = 100 * n / sum(n)
-  ) %>%
-  ungroup()
-
-binary_distribution
-
-
-# ============================================================
-# STEP 4: 100% stacked bar chart
-# ============================================================
-
-binary_figure <- ggplot(
-  binary_distribution,
-  aes(
-    x = factor(
-      degree_of_activeness_combined,
-      levels = c(0, 1),
-      labels = c("Score 0", "Score 1")
-    ),
-    y = percentage,
-    fill = language_group
-  )
-) +
-  geom_col(
-    width = 0.65,
-    color = "white",
-    linewidth = 0.5
-  ) +
-  geom_text(
-    aes(
-      label = if_else(
-        percentage >= 5,
-        paste0(round(percentage, 1), "%"),
-        ""
-      )
-    ),
-    position = position_stack(vjust = 0.5),
-    size = 4.5
-  ) +
-  coord_flip() +
-  scale_fill_manual(
-    values = c(
-      "Community bilinguals" = "#8DAEE1",
-      "Community–Heritage bilinguals" = "#B0DA87",
-      "Trilinguals+" = "#FAE0BD"
-    )
-  ) +
-  scale_y_continuous(
-    limits = c(0, 100),
-    breaks = seq(0, 100, 20),
-    labels = function(x) paste0(x, "%"),
-    expand = c(0, 0)
-  ) +
-  labs(
-    x = NULL,
-    y = "Percentage of children",
-    fill = "Language group",
-    title = "Language profiles by combined activeness score"
-  ) +
-  theme_classic(base_size = 15) +
-  theme(
-    plot.title = element_text(
-      face = "bold",
-      size = 16
-    ),
-    legend.position = "bottom",
-    legend.title = element_blank(),
-    legend.text = element_text(size = 12),
-    axis.text = element_text(size = 13)
-  )
-
-binary_figure
-
-ggsave(
-  "Figure_binary_activeness_language_groups.pdf",
-  binary_figure,
-  width = 7.2,
-  height = 4.5,
-  bg = "white"
-)
-
-
-binary_by_group <- binary_plot_data %>%
-  filter(
-    !is.na(degree_of_activeness_combined),
-    !is.na(language_group)
-  ) %>%
-  group_by(language_group) %>%
-  summarise(
-    N = n(),
-    n_score_1 = sum(degree_of_activeness_combined == 1),
-    percent_score_1 = 100 * mean(
-      degree_of_activeness_combined == 1
-    ),
-    .groups = "drop"
-  )
-
-binary_by_group
-
-
-#Let's do a chi-square test of independence to see if thecategories of children who score 1 in the binary score are distributed the same way they are in our sample 
-
-
-
-# Create contingency table
-activeness_table <- table(
-  binary_plot_data$language_group,
-  binary_plot_data$degree_of_activeness_combined
-)
-
-activeness_table
-
-# Pearson chi-square test
-chi_result <- chisq.test(
-  activeness_table,
-  correct = FALSE
-)
-
-chi_result
-
-# Check expected frequencies
-chi_result$expected
-
-# Standardized Pearson residuals
-chi_result$stdres
-
-# Cramer's V
-cramers_v <- sqrt(
-  unname(chi_result$statistic) /
-    (sum(activeness_table) *
-       min(dim(activeness_table) - 1))
-)
-
-cramers_v
-
-
-
-# Summarize binary outcome by language group
-pairwise_data <- binary_plot_data %>%
-  filter(
-    !is.na(language_group),
-    !is.na(degree_of_activeness_combined)
-  ) %>%
-  group_by(language_group) %>%
-  summarise(
-    n_score_1 = sum(degree_of_activeness_combined == 1),
-    N = n(),
-    .groups = "drop"
-  )
-
-# Pairwise comparisons of proportions
-pairwise_result <- pairwise.prop.test(
-  x = pairwise_data$n_score_1,
-  n = pairwise_data$N,
-  p.adjust.method = "holm"
-)
-
-pairwise_result
-
-
-#Let's then also make a sensitivity analyses that does not punish trilingual children making them harder to achieve the score of 1 because they have to surpass the threshold for more languages
-
-# ============================================================
-# STEP 1: Calculate proportion of active languages per child
-# ============================================================
-
-child_activeness <- model_data_long %>%
-  group_by(internal_id) %>%
-  summarise(
-    n_languages = n(),
-    n_valid = sum(!is.na(active_use)),
-
-    n_active = sum(
-      active_use >= 2,
-      na.rm = TRUE
-    ),
-
-    proportion_active = if_else(
-      n_valid > 0,
-      n_active / n_valid,
-      NA_real_
-    ),
-
-    .groups = "drop"
-  )
-
-# Join language group classifications
-sensitivity_data <- child_activeness %>%
-  left_join(
-    language_groups %>%
-      select(internal_id, language_group),
-    by = "internal_id"
-  )
-
-# Check results
-sensitivity_data %>%
-  group_by(language_group) %>%
-  summarise(
-    N = n(),
-    Mean_proportion = mean(
-      proportion_active,
-      na.rm = TRUE
-    ),
-    SD = sd(
-      proportion_active,
-      na.rm = TRUE
-    ),
-    Median = median(
-      proportion_active,
-      na.rm = TRUE
-    ),
-    .groups = "drop"
-  )
-
-
-
-# ============================================================
-# STEP 2: Visualize proportions across language groups
-# ============================================================
-
-sensitivity_plot <- sensitivity_data %>%
-  filter(
-    !is.na(language_group),
-    !is.na(proportion_active)
-  ) %>%
-  ggplot(
-    aes(
-      x = language_group,
-      y = proportion_active,
-      fill = language_group
-    )
-  ) +
-  geom_jitter(
-    width = 0.15,
-    height = 0,
-    alpha = 0.35,
-    size = 2,
-    shape = 21
-  ) +
-  stat_summary(
-    fun = mean,
-    geom = "point",
-    shape = 23,
-    size = 4,
-    fill = "white",
-    color = "black"
-  ) +
-  scale_fill_manual(
-    values = c(
-      "Community bilinguals" = "#8DAEE1",
-      "Community–Heritage bilinguals" = "#B0DA87",
-      "Trilinguals+" = "#FAE0BD"
-    )
-  ) +
-  scale_y_continuous(
-    labels = scales::percent,
-    limits = c(0, 1)
-  ) +
-  labs(
-    x = NULL,
-    y = "Proportion of languages meeting activeness criterion",
-    title = "Sensitivity analysis: Proportion of active languages"
-  ) +
-  theme_classic(base_size = 14) +
-  theme(
-    legend.position = "none",
-    axis.text.x = element_text(
-      angle = 15,
-      hjust = 1
-    )
-  )
-
-sensitivity_plot
-
-
-
-# ============================================================
-# STEP 3: Kruskal-Wallis test
-# ============================================================
-
-sensitivity_complete <- sensitivity_data %>%
-  filter(
-    !is.na(language_group),
-    !is.na(proportion_active)
-  )
-
-kruskal_result <- kruskal.test(
-  proportion_active ~ language_group,
-  data = sensitivity_complete
-)
-
-kruskal_result
-
-
-pairwise.wilcox.test(
-  x = sensitivity_complete$proportion_active,
-  g = sensitivity_complete$language_group,
-  p.adjust.method = "holm",
-  exact = FALSE
-)
-
-
-# ============================================================
-# STEP 4: Exploratory binomial regression
-# ============================================================
-
-binomial_model <- glm(
-  cbind(
-    n_active,
-    n_valid - n_active
-  ) ~ language_group,
-  data = sensitivity_data %>%
-    filter(
-      !is.na(language_group),
-      n_valid > 0
-    ),
-  family = binomial
-)
-
-summary(binomial_model)
-
-# Omnibus test of language group
-drop1(
-  binomial_model,
-  test = "Chisq"
-)
-
-
-#Sensitivity analyses show no differences between groups, meaning that the stringent binary outcome causes the group differences, that is, if children did not have to speak more than two languages, the groups would be comparable, but because some do have to... those children tend to get less classified as 'active users' In other words. It is harder to be an active user when you have to speak three languages.
-
-#Final exploratory analysis. Are some specific languages disproportionately falling below the activeness threshold we set up?
-
-
-# ============================================================
-# FIGURE: COMMUNITY VS HERITAGE LANGUAGE STATUS
-# FOR LANGUAGES BELOW THRESHOLD
-# Two rows: Activeness and Interlocutor matching
-# Two columns: Community–Heritage bilinguals and Trilinguals+
-# ============================================================
-
-library(dplyr)
-library(ggplot2)
-library(tidyr)
-library(patchwork)
-
-# ------------------------------------------------------------
-# 1. Set thresholds
-# ------------------------------------------------------------
-
-ACTIVE_THRESHOLD <- 2
-MATCHING_THRESHOLD <- 80   # <-- change this if your threshold differs
-
-# ------------------------------------------------------------
-# 2. Prepare language-level data
-# ------------------------------------------------------------
-
-threshold_plot_data <- model_data_long %>%
-  left_join(
-    language_groups %>%
-      select(internal_id, language_group),
-    by = "internal_id"
-  ) %>%
-  mutate(
-    language_type = factor(
-      as.character(language_type),
-      levels = c("Community", "Heritage")
-    ),
-
-    below_activeness = case_when(
-      is.na(active_use) ~ NA_integer_,
-      active_use < ACTIVE_THRESHOLD ~ 1L,
-      active_use >= ACTIVE_THRESHOLD ~ 0L
-    ),
-
-    below_matching = case_when(
-      is.na(interlocutor_matching) ~ NA_integer_,
-      interlocutor_matching < MATCHING_THRESHOLD ~ 1L,
-      interlocutor_matching >= MATCHING_THRESHOLD ~ 0L
-    )
-  ) %>%
-  filter(
-    language_group %in% c(
-      "Community–Heritage bilinguals",
-      "Trilinguals+"
-    ),
-    !is.na(language_group),
-    !is.na(language_type)
-  )
-
-# ------------------------------------------------------------
-# 3. Summarize percentages below threshold for each outcome
-# ------------------------------------------------------------
-
-activeness_summary <- threshold_plot_data %>%
-  filter(!is.na(below_activeness)) %>%
-  group_by(language_group, language_type) %>%
-  summarise(
-    n_languages = n(),
-    n_below = sum(below_activeness == 1),
-    percent_below = 100 * mean(below_activeness == 1),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    outcome_metric = "Active language use"
-  )
-
-matching_summary <- threshold_plot_data %>%
-  filter(!is.na(below_matching)) %>%
-  group_by(language_group, language_type) %>%
-  summarise(
-    n_languages = n(),
-    n_below = sum(below_matching == 1),
-    percent_below = 100 * mean(below_matching == 1),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    outcome_metric = "Interlocutor matching"
-  )
-
-threshold_summary <- bind_rows(
-  activeness_summary,
-  matching_summary
-) %>%
-  mutate(
-    outcome_metric = factor(
-      outcome_metric,
-      levels = c(
-        "Active language use",
-        "Interlocutor matching"
-      )
-    ),
-    language_group = factor(
-      language_group,
-      levels = c(
-        "Community–Heritage bilinguals",
-        "Trilinguals+"
-      )
-    )
-  )
-
-threshold_summary
-
-# ------------------------------------------------------------
-# 4. Plot
-# ------------------------------------------------------------
-
-threshold_figure <- ggplot(
-  threshold_summary,
-  aes(
-    x = language_type,
-    y = percent_below,
-    fill = language_type
-  )
-) +
-  geom_col(width = 0.6) +
-  geom_text(
-    aes(
-      label = paste0(round(percent_below, 1), "%")
-    ),
-    vjust = -0.4,
-    size = 4.3
-  ) +
-  facet_grid(
-    outcome_metric ~ language_group
-  ) +
-  scale_fill_manual(
-    values = c(
-      "Community" = "#8DAEE1",
-      "Heritage" = "#B0DA87"
-    ),
-    drop = FALSE
-  ) +
-  scale_y_continuous(
-    limits = c(0, 110),
-    breaks = seq(0, 100, 20),
-    labels = function(x) paste0(x, "%")
-  ) +
-  labs(
-    x = NULL,
-    y = "Languages below threshold (%)",
-    fill = "Language type",
-    title = "Language status composition of languages below threshold"
-  ) +
-  theme_classic(base_size = 14) +
-  theme(
-    legend.position = "bottom",
-    strip.text = element_text(
-      size = 13,
-      face = "bold"
-    ),
-    axis.text.x = element_text(size = 12)
-  )
-
-threshold_figure
-
-# ------------------------------------------------------------
-# 5. Save
-# ------------------------------------------------------------
-
-ggsave(
-  "Figure_below_threshold_by_status_and_outcome.pdf",
-  threshold_figure,
-  width = 8.5,
-  height = 7,
-  bg = "white"
-)
-
-
-# Mac nemar tests for the community language group and the comunity heritage groups
-
-
-community_paired <- inactive_language_data %>%
-  filter(
-    language_group == "Community bilinguals"
-  ) %>%
-  mutate(
-    language = case_when(
-      str_to_lower(str_squish(as.character(language))) %in%
-        c("english", "anglais") ~ "English",
-      str_to_lower(str_squish(as.character(language))) %in%
-        c("french", "français", "francais") ~ "French",
-      TRUE ~ as.character(language)
-    )
-  ) %>%
-  filter(language %in% c("French", "English")) %>%
-  select(internal_id, language, is_active) %>%
-  distinct() %>%
-  pivot_wider(
-    names_from = language,
-    values_from = is_active
-  ) %>%
-  filter(!is.na(French), !is.na(English))
-
-# French below threshold, English active
-b <- sum(
-  community_paired$French == 0 &
-  community_paired$English == 1
-)
-
-# English below threshold, French active
-c <- sum(
-  community_paired$French == 1 &
-  community_paired$English == 0
-)
-
-# Exact paired test
-if (b + c > 0) {
-  binom.test(
-    x = b,
-    n = b + c,
-    p = 0.5
-  )
-} else {
-  message("No discordant pairs available for testing.")
-}
-
-# Display the counts
-tibble(
-  French_below_English_active = b,
-  English_below_French_active = c
-)
-
-
-
-# ============================================================
-# Paired community vs heritage comparison
-# ============================================================
-
-
-# Force both possible outcomes to appear in the table
-
-paired_table <- table(
-  Community = factor(
-    paired_data$Community,
-    levels = c(0, 1)
-  ),
-  Heritage = factor(
-    paired_data$Heritage,
-    levels = c(0, 1)
-  )
-)
-
-paired_table
-
-# McNemar test with continuity correction
-mcnemar.test(
-  paired_table,
-  correct = TRUE
-)
-
-
-
-# Community active, Heritage below threshold
-b <- sum(
-  paired_data$Community == 1 &
-  paired_data$Heritage == 0
-)
-
-# Community below threshold, Heritage active
-c <- sum(
-  paired_data$Community == 0 &
-  paired_data$Heritage == 1
-)
-
-# Display discordant pairs
-tibble(
-  Heritage_below_Community_active = b,
-  Community_below_Heritage_active = c
-)
-
-# Exact McNemar test
-if (b + c > 0) {
-
-  exact_result <- binom.test(
-    x = b,
-    n = b + c,
-    p = 0.5
-  )
-
-  exact_result
-
-} else {
-
-  message(
-    "No discordant pairs: an exact paired test is not informative."
-  )
-
-}
-
-
-#linear mixed effects model for the trilinguals because they have multiple language observations per child
-
-
-library(dplyr)
 library(lme4)
-library(lmerTest)
-library(broom.mixed)
+library(dplyr)
+library(purrr)
+
+models_to_check <- list(
+  active_societal = active_societal,
+  active_family = active_family,
+  active_both = active_both_layers,
+  matching_societal = matching_societal,
+  matching_family = matching_family,
+  matching_both = matching_both_layers
+)
+
+
 
 # ============================================================
-# STEP 1: Prepare trilingual+ data
+# AUDIT: Model convergence and singularity
 # ============================================================
 
-trilingual_data <- inactive_language_data %>%
-  filter(
-    language_group == "Trilinguals+",
-    !is.na(is_active),
-    !is.na(language_type)
-  ) %>%
-  mutate(
-    below_threshold = 1L - is_active,
+diagnostic_summary <- purrr::imap_dfr(
+  models_to_check,
+  function(fit, model_name) {
 
-    language_type = factor(
-      as.character(language_type),
-      levels = c("Community", "Heritage")
+    conv_messages <- fit@optinfo$conv$lme4$messages
+
+    tibble::tibble(
+      model_name = model_name,
+      n_obs = stats::nobs(fit),
+      singular = lme4::isSingular(fit),
+      convergence_warning = if (length(conv_messages) == 0) {
+        "None"
+      } else {
+        paste(conv_messages, collapse = "; ")
+      },
+      residual_sd = stats::sigma(fit)
     )
+  }
+)
+
+diagnostic_summary
+
+
+
+
+
+library(DHARMa)
+
+set.seed(123)
+active_final_residuals <- simulateResiduals(
+  active_both_layers,
+  n = 1000
+)
+
+set.seed(123)
+matching_final_residuals <- simulateResiduals(
+  matching_societal,
+  n = 1000
+)
+
+# Compact diagnostic tests
+data.frame(
+  model = c("Active: both layers", "Matching: societal"),
+  uniformity_p = c(
+    testUniformity(active_final_residuals, plot = FALSE)$p.value,
+    testUniformity(matching_final_residuals, plot = FALSE)$p.value
+  ),
+  dispersion_p = c(
+    testDispersion(active_final_residuals, plot = FALSE)$p.value,
+    testDispersion(matching_final_residuals, plot = FALSE)$p.value
+  )
+)
+
+# Plot matching model if needed
+plot(matching_final_residuals)
+
+
+
+
+#Because some of the gaussian assumptions are violated, running a bootstrap analysis (sensitivity analyses) to see if the results we found for the LMEM are still significant 
+
+
+# ============================================================
+# SENSITIVITY ANALYSIS: Participant-cluster bootstrap
+# 500 replicates for each selected mixed-effects model
+# ============================================================
+
+library(lme4)
+
+cluster_bootstrap <- function(fit, B = 500, seed = 123) {
+
+  set.seed(seed)
+
+  # Use exactly the observations used in the fitted model
+  dat <- model.frame(fit)
+  original_beta <- lme4::fixef(fit)
+  terms <- names(original_beta)
+
+  # Store each child's rows together
+  child_rows <- split(
+    seq_len(nrow(dat)),
+    as.character(dat$internal_id)
   )
 
-# Check sample sizes and outcome distributions
-trilingual_data %>%
-  group_by(language_type) %>%
-  summarise(
-    N_observations = n(),
-    N_children = n_distinct(internal_id),
-    N_below = sum(below_threshold),
-    Percent_below = round(
-      100 * mean(below_threshold), 1
+  child_ids <- names(child_rows)
+  n_children <- length(child_ids)
+
+  # Storage
+  boot_coefs <- matrix(
+    NA_real_,
+    nrow = B,
+    ncol = length(terms),
+    dimnames = list(NULL, terms)
+  )
+
+  failed <- logical(B)
+  singular <- logical(B)
+  convergence <- logical(B)
+
+  for (b in seq_len(B)) {
+
+    # Sample children with replacement
+    sampled <- sample(
+      child_ids,
+      size = n_children,
+      replace = TRUE
+    )
+
+    # Include every language row for each sampled child.
+    # Assign a NEW cluster ID to each sampled copy.
+    boot_dat <- do.call(
+      rbind,
+      lapply(seq_along(sampled), function(i) {
+
+        child_dat <- dat[
+          child_rows[[sampled[i]]],
+          ,
+          drop = FALSE
+        ]
+
+        child_dat$internal_id <- paste0("boot_", i)
+
+        child_dat
+      })
+    )
+
+    boot_dat$internal_id <- factor(
+      boot_dat$internal_id
+    )
+
+    # Refit the same model specification
+    boot_fit <- tryCatch(
+      suppressWarnings(
+        lme4::lmer(
+          formula(fit),
+          data = boot_dat,
+          REML = FALSE,
+          control = lme4::lmerControl(
+            optimizer = "bobyqa",
+            optCtrl = list(maxfun = 100000)
+          )
+        )
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(boot_fit)) {
+      failed[b] <- TRUE
+      next
+    }
+
+    beta <- lme4::fixef(boot_fit)
+
+    # Record any unidentified/rank-deficient coefficients
+    if (!all(terms %in% names(beta))) {
+      failed[b] <- TRUE
+      next
+    }
+
+    boot_coefs[b, ] <- beta[terms]
+
+    singular[b] <- lme4::isSingular(boot_fit)
+
+    convergence[b] <- (
+      length(boot_fit@optinfo$conv$lme4$messages) > 0 ||
+      !is.null(boot_fit@optinfo$conv$opt) &&
+        boot_fit@optinfo$conv$opt != 0
+    )
+  }
+
+  # Successful bootstrap replicates
+  successful <- !failed
+
+  valid_coefs <- boot_coefs[
+    successful,
+    ,
+    drop = FALSE
+  ]
+
+  # Percentile confidence intervals
+  ci <- apply(
+    valid_coefs,
+    2,
+    quantile,
+    probs = c(0.025, 0.975),
+    na.rm = TRUE
+  )
+
+  results <- data.frame(
+    term = terms,
+    original_estimate = as.numeric(original_beta),
+    bootstrap_mean = colMeans(valid_coefs),
+    CI_lower = as.numeric(ci[1, ]),
+    CI_upper = as.numeric(ci[2, ]),
+    row.names = NULL
+  )
+
+  results$CI_excludes_zero <- (
+    results$CI_lower > 0 |
+    results$CI_upper < 0
+  )
+
+  list(
+    results = results,
+    diagnostics = data.frame(
+      requested = B,
+      successful = sum(successful),
+      failed = sum(failed),
+      singular_refits = sum(singular),
+      convergence_warnings = sum(convergence)
     ),
-    .groups = "drop"
+    coefficients = valid_coefs
   )
+}
 
-# Check that children contribute multiple language observations
-trilingual_data %>%
-  count(internal_id) %>%
-  count(n, name = "N_children")
+# ------------------------------------------------------------
+# Run the two selected models
+# ------------------------------------------------------------
 
-
-
-# ============================================================
-# STEP 2: Fit logistic mixed-effects models
-# ============================================================
-
-# Null model
-trilingual_null <- glmer(
-  below_threshold ~
-    1 +
-    (1 | internal_id),
-  data = trilingual_data,
-  family = binomial,
-  control = glmerControl(
-    optimizer = "bobyqa"
-  )
+active_boot <- cluster_bootstrap(
+  active_both_layers,
+  B = 500,
+  seed = 123
 )
 
-# Model with language type
-trilingual_model <- glmer(
-  below_threshold ~
-    language_type +
-    (1 | internal_id),
-  data = trilingual_data,
-  family = binomial,
-  control = glmerControl(
-    optimizer = "bobyqa"
-  )
+matching_boot <- cluster_bootstrap(
+  matching_societal,
+  B = 500,
+  seed = 456
 )
 
+# ------------------------------------------------------------
+# Inspect results
+# ------------------------------------------------------------
+
+active_boot$diagnostics
+matching_boot$diagnostics
+
+active_boot$results
+matching_boot$results
+
+
+
+
+
+#Log models all converge and do not show multicolinearity
+
+#doing some extra spline analyses 
+
+
 # ============================================================
-# STEP 3: Compare models
+# AUDIT: Linearity of multilingual rate in logistic models
 # ============================================================
+
+library(splines)
+
+# Active-use outcome
+active_societal_spline <- update(
+  active_societal_log,
+  . ~ . - multilingual_rate_z +
+    ns(multilingual_rate_z, df = 3)
+)
 
 anova(
-  trilingual_null,
-  trilingual_model,
+  active_societal_log,
+  active_societal_spline,
   test = "Chisq"
 )
 
-# Model coefficients
-summary(trilingual_model)
-
-
-
-
-# ============================================================
-# STEP 4: Odds ratios and 95% confidence intervals
-# ============================================================
-
-trilingual_OR <- broom.mixed::tidy(
-  trilingual_model,
-  effects = "fixed",
-  conf.int = TRUE,
-  conf.method = "Wald",
-  exponentiate = TRUE
+# Matching outcome
+matching_societal_spline <- update(
+  matching_societal_log,
+  . ~ . - multilingual_rate_z +
+    ns(multilingual_rate_z, df = 3)
 )
 
-trilingual_OR
-
-
-
-
-
-# ============================================================
-# STEP 5: Model diagnostics
-# ============================================================
-
-# Singularity
-isSingular(trilingual_model)
-
-# Convergence messages
-trilingual_model@optinfo$conv$lme4$messages
-
-# Random intercept variance
-VarCorr(trilingual_model)
-
-# Number of observations and children
-nobs(trilingual_model)
-
-n_distinct(trilingual_data$internal_id)
-
-
-
-
+anova(
+  matching_societal_log,
+  matching_societal_spline,
+  test = "Chisq"
+)
 
 
 ```
