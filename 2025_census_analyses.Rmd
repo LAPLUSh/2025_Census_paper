@@ -1155,9 +1155,9 @@ minority_cor_data_matrix <- minority_cor_data %>%
     language_knowledge_rate,
     minority_overall_exposure,
     minority_book_resources,
+    minority_sources,
     minority_book_reading,
-    minority_interlocutor_matching,
-    minority_sources
+    minority_interlocutor_matching
   )
 
 
@@ -1250,60 +1250,92 @@ run_language_correlations <- function(data, language_name) {
   # Remove upper triangle and diagonal
   formatted_matrix[upper.tri(formatted_matrix, diag = TRUE)] <- ""
 
-  # ----------------------------------------------------------
-  # D. Generate manuscript-friendly variable labels
-  # ----------------------------------------------------------
 
-  pretty_labels <- c(
-    child_age_years = "Child age",
-    beleifs_ahead_in_life = "Beliefs: Ahead in life",
-    beleifs_belonging = "Beliefs: Belonging",
-    beliefs_cognitive_benefits =
-      "Beliefs: Cognitive benefits",
-    worry_master_languages =
-      "Worry: Mastering languages",
-    worry_cognitive_difficulties =
-      "Worry: Cognitive difficulties",
-    worry_school_difficulties =
-      "Worry: School difficulties",
+# ----------------------------------------------------------
+# D. Manuscript-consistent variable labels
+# ----------------------------------------------------------
 
-    child_english_active_use_category = "Active use",
-    child_french_active_use_category = "Active use",
-    minority_active_use = "Active use",
+# Identify the language represented by this matrix
+language_label <- dplyr::case_when(
+  language_name == "English" ~ "English",
+  language_name == "French" ~ "French",
+  language_name == "Minority languages" ~ "Heritage",
+  TRUE ~ language_name
+)
 
-    language_knowledge_rate = "Regional speaker rate",
+# Labels shared by all three analyses
+pretty_labels <- c(
+  child_age_years = "Child age",
+  beleifs_ahead_in_life = "Status attitudes",
+  beleifs_belonging = "Solidarity attitudes",
+  beliefs_cognitive_benefits = "Cognition attitudes",
+  worry_master_languages = "Exposure-fluency concerns",
+  worry_cognitive_difficulties =
+    "Cognitive development concerns",
+  worry_school_difficulties = "School concerns",
 
-    overall_exposure_english_child = "Language exposure",
-    overall_exposure_french_child = "Language exposure",
-    minority_overall_exposure = "Language exposure",
+  child_english_active_use_category =
+    "Degree of active use",
+  child_french_active_use_category =
+    "Degree of active use",
+  minority_active_use =
+    "Degree of active use",
 
-    book_resources_english = "Book resources",
-    book_resources_french = "Book resources",
-    minority_book_resources = "Book resources",
+  language_knowledge_rate = "Speaker rate",
 
-    caregiver_sources_english = "Caregiver sources",
-    caregiver_sources_french = "Caregiver sources",
-    minority_sources = "Caregiver sources",
+  overall_exposure_english_child =
+    paste0("Language exposure (", language_label, ")"),
+  overall_exposure_french_child =
+    paste0("Language exposure (", language_label, ")"),
+  minority_overall_exposure =
+    paste0("Language exposure (", language_label, ")"),
 
-    caregiver_english_book_reading = "Book reading",
-    caregiver_french_book_reading = "Book reading",
-    minority_book_reading = "Book reading",
+  book_resources_english =
+    paste0("Access to books (", language_label, ")"),
+  book_resources_french =
+    paste0("Access to books (", language_label, ")"),
+  minority_book_resources =
+    paste0("Access to books (", language_label, ")"),
 
-    child_english_interlocutor_matching =
-      "Interlocutor matching",
-    child_french_interlocutor_matching =
-      "Interlocutor matching",
-    minority_interlocutor_matching =
-      "Interlocutor matching"
+  caregiver_sources_english =
+    paste0("Caregiver sources (", language_label, ")"),
+  caregiver_sources_french =
+    paste0("Caregiver sources (", language_label, ")"),
+  minority_sources =
+    paste0("Caregiver sources (", language_label, ")"),
+
+  caregiver_english_book_reading =
+    paste0("Book reading (", language_label, ")"),
+  caregiver_french_book_reading =
+    paste0("Book reading (", language_label, ")"),
+  minority_book_reading =
+    paste0("Book reading (", language_label, ")"),
+
+  child_english_interlocutor_matching =
+    paste0("Interlocutor matching (", language_label, ")"),
+  child_french_interlocutor_matching =
+    paste0("Interlocutor matching (", language_label, ")"),
+  minority_interlocutor_matching =
+    paste0("Interlocutor matching (", language_label, ")")
+)
+
+variable_names <- colnames(r_matrix)
+
+display_names <- unname(
+  pretty_labels[variable_names]
+)
+
+# Prevent unidentified variable names
+if (anyNA(display_names)) {
+  stop(
+    "Missing display labels for: ",
+    paste(
+      variable_names[is.na(display_names)],
+      collapse = ", "
+    )
   )
+}
 
-  variable_names <- colnames(r_matrix)
-
-  display_names <- unname(pretty_labels[variable_names])
-
-  # Use original variable name if no pretty label exists
-  display_names[is.na(display_names)] <-
-    variable_names[is.na(display_names)]
 
   # ----------------------------------------------------------
   # E. Build Word table
@@ -1387,28 +1419,48 @@ run_language_correlations <- function(data, language_name) {
   # F. Create corrplot
   # ----------------------------------------------------------
 
-  corrplot(
-    r_matrix,
-    method = "circle",
-    type = "upper",
-    diag = TRUE,
-    tl.col = "black",
-    tl.srt = 45,
-    p.mat = p_matrix,
-    sig.level = 0.05,
-    insig = "pch",
-    pch = "x",
-    pch.col = "grey50"
-  )
 
-  title(
-    main = paste(
-      language_name,
-      "Spearman correlations"
-    ),
-    line = 2
-  )
+# ----------------------------------------------------------
+# F. Create corrplot with manuscript labels
+# ----------------------------------------------------------
 
+# Copies for visualization only
+plot_r <- r_matrix
+plot_p <- p_matrix
+
+dimnames(plot_r) <- list(
+  display_names,
+  display_names
+)
+
+dimnames(plot_p) <- list(
+  display_names,
+  display_names
+)
+
+corrplot::corrplot(
+  plot_r,
+  method = "circle",
+  type = "upper",
+  diag = TRUE,
+  tl.col = "black",
+  tl.srt = 45,
+  tl.cex = 0.65,
+  mar = c(0, 0, 2, 0),
+  p.mat = plot_p,
+  sig.level = 0.05,
+  insig = "pch",
+  pch = "x",
+  pch.col = "grey50"
+)
+
+title(
+  main = paste(
+    language_label,
+    "language correlations"
+  ),
+  line = 1
+)
   # ----------------------------------------------------------
   # G. Return all objects
   # ----------------------------------------------------------
@@ -3363,14 +3415,189 @@ agnostic_significant_correlations_TEST <- language_agnostic_correlation_TEST$p <
 
 agnostic_significant_correlations_TEST
 
-corrplot(
-  language_agnostic_correlation,
+
+# ============================================================
+# LANGUAGE-GENERAL CORRELATIONS:
+# MANUSCRIPT LABELS, HEAT MAP, AND WORD TABLE
+# ============================================================
+
+# 1. Define order and display names
+agnostic_labels <- c(
+  child_age_years = "Child age",
+  beleifs_ahead_in_life = "Status attitudes",
+  beleifs_belonging = "Solidarity attitudes",
+  beliefs_cognitive_benefits = "Cognition attitudes",
+  worry_master_languages = "Exposure-fluency concerns",
+  worry_cognitive_difficulties =
+    "Cognitive development concerns",
+  worry_school_difficulties = "School concerns",
+  multilingual_rate = "Multilingualism rate",
+  degree_of_activeness_combined =
+    "Multilingual degree of active use",
+  language_matching_combined =
+    "Multilingual interlocutor matching"
+)
+
+# 2. Order the existing correlation and p-value matrices
+variable_order <- names(agnostic_labels)
+
+stopifnot(
+  all(variable_order %in%
+        rownames(language_agnostic_correlation_TEST$r))
+)
+
+agnostic_r <- language_agnostic_correlation_TEST$r[
+  variable_order,
+  variable_order
+]
+
+agnostic_p <- language_agnostic_correlation_TEST$p[
+  variable_order,
+  variable_order
+]
+
+# 3. Apply manuscript labels
+dimnames(agnostic_r) <- list(
+  unname(agnostic_labels),
+  unname(agnostic_labels)
+)
+
+dimnames(agnostic_p) <- list(
+  unname(agnostic_labels),
+  unname(agnostic_labels)
+)
+
+# 4. Create labelled heat map
+corrplot::corrplot(
+  agnostic_r,
   method = "circle",
   type = "upper",
   diag = TRUE,
   tl.col = "black",
   tl.srt = 45,
+  tl.cex = 0.75,
+  mar = c(0, 0, 2, 0),
+  p.mat = agnostic_p,
+  sig.level = 0.05,
+  insig = "pch",
+  pch = "x",
+  pch.col = "grey50"
 )
+
+title(
+  main = "Language-general Spearman correlations",
+  line = 1
+)
+
+# 5. Generate a correlation table with significance stars
+agnostic_stars <- matrix(
+  "",
+  nrow = nrow(agnostic_p),
+  ncol = ncol(agnostic_p),
+  dimnames = dimnames(agnostic_p)
+)
+
+agnostic_stars[
+  !is.na(agnostic_p) & agnostic_p < .05
+] <- "*"
+
+agnostic_stars[
+  !is.na(agnostic_p) & agnostic_p < .01
+] <- "**"
+
+agnostic_stars[
+  !is.na(agnostic_p) & agnostic_p < .001
+] <- "***"
+
+formatted_agnostic <- matrix(
+  "",
+  nrow = nrow(agnostic_r),
+  ncol = ncol(agnostic_r),
+  dimnames = dimnames(agnostic_r)
+)
+
+valid <- !is.na(agnostic_r)
+
+formatted_agnostic[valid] <- paste0(
+  sprintf("%.3f", agnostic_r[valid]),
+  agnostic_stars[valid]
+)
+
+# Empty upper triangle; retain diagonal as dashes
+formatted_agnostic[
+  upper.tri(formatted_agnostic)
+] <- ""
+
+diag(formatted_agnostic) <- "\u2014"
+
+# 6. Format for Word
+agnostic_table_data <- as.data.frame(
+  formatted_agnostic,
+  check.names = FALSE
+)
+
+colnames(agnostic_table_data) <-
+  as.character(seq_along(variable_order))
+
+agnostic_table_data <- tibble::tibble(
+  Variable = paste0(
+    seq_along(variable_order),
+    ". ",
+    unname(agnostic_labels)
+  )
+) %>%
+  dplyr::bind_cols(agnostic_table_data)
+
+agnostic_word_table <-
+  flextable::flextable(agnostic_table_data) %>%
+  flextable::theme_booktabs() %>%
+  flextable::fontsize(size = 8, part = "all") %>%
+  flextable::bold(part = "header") %>%
+  flextable::align(
+    j = 1,
+    align = "left",
+    part = "all"
+  ) %>%
+  flextable::align(
+    j = 2:ncol(agnostic_table_data),
+    align = "center",
+    part = "all"
+  ) %>%
+  flextable::width(j = 1, width = 2.8) %>%
+  flextable::width(
+    j = 2:ncol(agnostic_table_data),
+    width = 0.65
+  ) %>%
+  flextable::add_footer_lines(
+    values = paste0(
+      "Note. Spearman's rho. ",
+      "* p < .05, ** p < .01, *** p < .001. ",
+      "Two-sided, unadjusted p-values. ",
+      "Pairwise deletion of missing observations."
+    )
+  ) %>%
+  flextable::fontsize(
+    size = 8,
+    part = "footer"
+  ) %>%
+  flextable::italic(part = "footer")
+
+# 7. Export editable Word table
+landscape_section <- officer::prop_section(
+  page_size = officer::page_size(
+    orient = "landscape"
+  )
+)
+
+flextable::save_as_docx(
+  "Language-general Spearman correlations" =
+    agnostic_word_table,
+  path = "Language_General_Correlations.docx",
+  pr_section = landscape_section
+)
+
+agnostic_word_table
+
 
 
 
