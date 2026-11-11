@@ -1,0 +1,7335 @@
+---
+title: "2025_census_analyses"
+author: "ASM"
+date: "2026-03-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### NOTE THIS IS A COPY OF THE ORIGINAL SCRIPT BUT WHERE WE EXCLUDE CHILDREN WITH WIERD AOA TO SEE OF THE RESULTS CHANGE
+```{r loading packages and data}
+
+library(tidylog)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(broom)
+library(lubridate)
+library(corrplot)
+library(cancensus)
+options(cancensus.api_key = "CensusMapper_9cd8925d1dd9197227f4bfaf596e0797")
+library(here)
+library(readxl)
+library(stringr)
+library(cansim)
+library(lme4)
+library(lmerTest)
+library(performance)
+library(arrow)
+library(modelsummary)
+library(flextable)
+library(tidyverse)
+library(patchwork)
+library(tidyr)
+library(broom.mixed)
+library(officer)
+library(scales)
+library(psych)
+library(purrr)
+
+census_data<- read_excel("Anonymized_Data/census_data_w_language.xlsx")
+column_clean_names<- read.csv("column_clean_names.csv")
+old_data<-read.csv("Anonymized_Data/first_collection_w_predictors.csv")
+
+```
+
+Data cleaning and wrangling
+```{r cleaning parent report data}
+census_data<-clean_names(census_data)
+
+
+
+#First let's get rid of the screened out people
+
+data_clean<- census_data %>%
+  dplyr::filter(status=="Submitted") %>%
+  dplyr::filter(by_clicking_on_the_i_agree_button_i_certify_that_i_have_read_the_information_and_consent_form_i_voluntarily_and_freely_consent_to_participate_in_this_research_project== "I agree") %>%
+  dplyr::filter(has_your_child_been_diagnosed_with_a_speech_disorder_or_a_language_delay== "No") %>%
+  dplyr::filter(!internal_id %in% c(39902130, 40035826, 40034298)) #bad quality data, reporting the same language multiple times and probably asimple survey glitch where this person should have gotteh screen out for being moolingual
+
+#Relocating the survey language column to last place (this is a new column added), so that new column placing does not affect the column select below
+
+data_clean <- data_clean %>% 
+  relocate(language, .after = last_col())
+
+#Now let's select only the columns of data that we need
+
+columns_drop<- c(2,3,4, 9:17, 21, 22, 25, 28, 31, 71:86, 92, 103, 114, 120, 121, 122, 128, 136, 140, 141, 143, 144, 146, 150, 151, 153, 154, 156, 160, 161, 163, 164, 166,176, 170, 171, 173, 174, 180, 181, 183:185)
+             
+
+data_clean<- data_clean %>%
+  dplyr::select(-all_of(columns_drop))
+
+#Now let's clean the column names from the very long ones to ones easy to call in the environment by using the csv file I created containing the survey expost names cleaned from R and shorter manageable names I would like for them to be called
+
+data_clean <- data_clean %>%
+  rename(!!!setNames(column_clean_names$old_names,
+                     column_clean_names$new_names))
+
+
+#Now let's get dates into the correct format 
+data_clean$survey_date<- as.Date(data_clean$survey_date)
+data_clean$child_dob <- as.Date(data_clean$child_dob)
+
+#Let's make an age variable, calculated from the date of the survey and the date of birth
+data_clean$child_age_years <- time_length(
+  interval(data_clean$child_dob, data_clean$survey_date),
+  unit = "years"
+) %>% floor()
+
+
+```
+
+
+```{r adding number of sources predictor}
+
+english_sources<- data_clean %>%
+  select(internal_id, caregiver_1_english, caregiver_2_english, older_siblings_english, younger_siblings_english, other_family_english, child_friends_english, teachers_english) %>%
+  mutate(english_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, english_sources_n)
+
+french_sources<- data_clean %>%
+  select(internal_id, caregiver_1_french, caregiver_2_french, older_siblings_french, younger_siblings_french, other_family_french, child_friends_french, teachers_french) %>%
+  mutate(french_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, french_sources_n)
+
+first_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_first_minority, caregiver_2_first_minority, older_siblings_first_minority, younger_siblings_first_minority, other_family_first_minority, child_friends_first_minority, teachers_first_minority) %>%
+  mutate(first_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, first_min_sources_n)
+
+
+second_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_second_minority, caregiver_2_second_minority, older_siblings_second_minority, younger_siblings_second_minority, other_family_second_minority, child_friends_second_minority, teachers_second_minority) %>%
+  mutate(second_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, second_min_sources_n)
+
+third_min_sources<- data_clean %>%
+  select(internal_id, caregiver_1_third_minority, caregiver_2_third_minority, older_siblings_third_minority, younger_siblings_third_minority, other_family_third_minority, child_friends_third_minority, teachers_third_minority) %>%
+  mutate(third_min_sources_n = rowSums(!is.na(across(-internal_id)))) %>%
+  select(internal_id, third_min_sources_n)
+
+
+all_language_sources<- english_sources %>%
+  left_join(french_sources) %>%
+  left_join(first_min_sources) %>%
+  left_join(second_min_sources) %>%
+  left_join(third_min_sources)
+
+
+#Now let's join the sum of sources from each language into our dataset with predictors
+
+clean_w_predictors <- data_clean %>%
+  left_join(all_language_sources, by="internal_id")
+
+
+#Also making a coarser caregiver sources predictor to match what we have in the first collection data
+
+clean_w_predictors<- clean_w_predictors %>%
+  mutate(
+    caregiver_sources_english =
+      (caregiver_1_english = !is.na(caregiver_1_english)) + 
+      (caregiver_2_english =  !is.na(caregiver_2_english)),
+
+    caregiver_sources_french =
+      (caregiver_1_french = !is.na(caregiver_1_french)) +
+      (caregiver_2_french = !is.na(caregiver_2_french)),
+
+    caregiver_sources_first_minority =
+      (caregiver_1_first_minority = !is.na(caregiver_1_first_minority)) +
+      (caregiver_2_first_minority = !is.na(caregiver_2_first_minority)),
+
+    caregiver_sources_second_minority =
+      (caregiver_1_second_minority = !is.na(caregiver_1_second_minority)) +
+      (caregiver_2_second_minority = !is.na(caregiver_2_second_minority)),
+
+    caregiver_sources_third_minority =
+      (caregiver_1_third_minority = !is.na(caregiver_1_third_minority)) +
+      (caregiver_2_third_minority = !is.na(caregiver_2_third_minority))
+  )
+
+
+```
+
+
+```{r recode categories to numbers}
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_active_use_category,
+        child_french_active_use_category,
+        child_first_min_active_use_category,
+        child_second_min_active_use_category,
+        child_third_min_active_use_category
+      ),
+      ~ recode(
+        .x,
+        "My child does not understand or speak this language" = 0,
+        "My child understands this language, but rarely speaks in it" = 1,
+        "My child speaks this language mainly when someone addresses them in that language" = 2,
+        "My child speaks this language spontaneously" = 3
+      )
+    )
+  )
+
+
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        caregiver_1_english_proficiency,
+        caregiver_1_french_proficiency,
+        caregiver_1_first_min_proficiency,
+        caregiver_1_second_min_proficiency,
+        caregiver_1_third_min_proficiency,
+        caregiver_2_english_proficiency,
+        caregiver_2_french_proficiency,
+        caregiver_2_first_min_proficiency,
+        caregiver_2_second_min_proficiency,
+        caregiver_2_third_min_proficiency,
+      ),
+      ~ case_when(
+        .x == "They do not speak this language" ~ 0,
+        .x == "Very poor" ~ 1,
+        .x == "Poor" ~ 2,
+        .x == "Acceptable" ~ 3,
+        .x == "Good" ~ 4,
+        .x == "Excellent" ~ 5,
+        TRUE ~ NA_real_
+      ),
+      .names = "{.col}" 
+    )
+  )
+
+
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    across(
+      c(
+        child_english_mixing,
+        child_french_mixing,
+        child_first_min_mixing,
+        child_second_min_mixing,
+        child_third_min_mixing
+      ),
+      ~ case_when(
+        str_detect(.x, "^My child never uses other languages") ~ 1,
+        str_detect(.x, "^My child mixes in a few words") ~ 2,
+        str_detect(.x, "^My child speaks mainly in another language") ~ 3,
+        str_detect(.x, "^My child never speaks") ~ NA_real_,
+        TRUE ~ NA_real_
+      ),
+      .names = "{.col}"
+    )
+  )
+```
+
+
+```{r merging new data with first collection}
+ #Now that the predictors are wrangled let's select only the columns we need for the analyses
+
+clean_w_predictors <- clean_w_predictors %>%
+  select(-c( "survey_date", "status", "confirmation_number", "pid", "child_dob","caregiver_1_english","caregiver_2_english","younger_siblings_english","older_siblings_english","other_family_english","child_friends_english","teachers_english","caregiver_1_french","caregiver_2_french","younger_siblings_french","older_siblings_french",            "other_family_french","child_friends_french","teachers_french","caregiver_1_first_minority","caregiver_2_first_minority",          "younger_siblings_first_minority", "older_siblings_first_minority","other_family_first_minority","child_friends_first_minority",           "teachers_first_minority","caregiver_1_second_minority","caregiver_2_second_minority","younger_siblings_second_minority",      "older_siblings_second_minority","other_family_second_minority","child_friends_second_minority","teachers_second_minority",              "caregiver_1_third_minority","caregiver_2_third_minority","younger_siblings_third_minority","older_siblings_third_minority",        "other_family_third_minority","child_friends_third_minority","teachers_third_minority"))
+
+
+#fixing some inconsistencies so that the datasets can merge
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(minority_lang_count = as.integer(as.character(minority_lang_count)))
+
+old_data <- old_data %>%
+  mutate(data_collection = "first")
+
+#Also fixing capitalization issue in old data
+old_data <- old_data %>%
+   mutate(caregiver_1_gender= str_to_title(caregiver_1_gender))
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(data_collection = "second")
+
+clean_w_predictors<- clean_w_predictors %>%
+  full_join(old_data)
+
+
+#exclude children who are not on the age range
+clean_w_predictors <- clean_w_predictors %>%
+  filter(child_age_years>=3 & child_age_years<9)
+
+#Wrangle error in data where the caregiver genders in the English version of the data are reverted from the French version. So female french = male english.
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(caregiver_1_gender = case_when(survey_language=="EN" & caregiver_1_gender == "Female"~"Male",
+                                        survey_language=="EN" & caregiver_1_gender == "Male"~"Female",
+                                        T ~ caregiver_1_gender))
+
+#Flag cases with wierd AOAs
+
+clean_w_predictors <- clean_w_predictors %>%
+  mutate(
+    aoa_age_flag = if_any(
+      c(
+        aoa_english_child,
+        aoa_french_child,
+        aoa_first_min_child,
+        aoa_second_min_child,
+        aoa_third_min_child
+      ),
+      ~ !is.na(.x) & .x >= child_age_years
+    )
+  ) %>%
+  filter(!aoa_age_flag)
+
+
+
+## Creating a language standardizing function to be used throughout 
+
+
+# ============================================================
+# Standardize language names across datasets
+# ============================================================
+
+standardize_language <- function(x) {
+
+  dplyr::case_when(
+    x == "Anglais" ~ "English",
+    x %in% c("Francais", "francais") ~ "French",
+    x == "Berbère" ~ "Berber",
+    x == "Portugais" ~ "Portuguese",
+    x %in% c("Allemand", "allemand",
+             "Suisse-Allemand") ~ "German",
+    x %in% c("Italien", "italien") ~ "Italian",
+    x %in% c("Espagnol", "espagnol") ~ "Spanish",
+    x == "hungarian" ~ "Hungarian",
+    x %in% c("Polonais", "polonais") ~ "Polish",
+
+    x == "Spanish and German" ~ "German",
+    x == "francaus et arabe" ~ "Arabic",
+    x == "Bosnian (Serbian, Croatian)" ~ "Bosnian",
+    x == "Grec" ~ "Greek",
+
+    x %in% c(
+      "Créole Reunionnais",
+      "Créole reunionnais",
+      "Créole réunionnais"
+    ) ~ "Creole languages, n.i.e.",
+
+    x == "créole haïtien" ~ "Haitian Creole",
+    x == "le lingala" ~ "Lingala",
+
+    x %in% c("Lsq", "LSQ") ~ "QSL",
+    x == "Arménien" ~ "Armenian",
+    x == "Malgache" ~ "Malagasy",
+    x == "Cri" ~ "Cree",
+    x == "Russe" ~ "Russian",
+    x == "Arabe" ~ "Arabic",
+
+    x %in% c("Mooré", "Moore", "Banen") ~
+      "Niger-Congo languages, n.i.e.",
+
+    x == "Non" ~ NA_character_,
+
+    TRUE ~ x
+  )
+}
+
+
+```
+
+
+```{r making census bilingualism rate variable}
+
+# ============================================================
+# Create a Census Division-level multilingualism rate predictor
+# ============================================================
+#
+# Goal:
+# Estimate the proportion of people in each Quebec Census Division
+# who report knowledge of multiple languages, using Statistics Canada
+# 2021 Census data.
+#
+# The final variable, multilingual_rate, is:
+#
+#   multiple-language responses / total knowledge-of-language responses
+#
+# We then merge this regional rate into the survey dataset based on
+# each participant's Census Division.
+
+
+# 1. Retrieve Quebec Census Division names and geographic IDs
+# -----------------------------------------------------------
+#
+# We first use cancensus to obtain the list of Quebec Census Divisions.
+# We do not need a substantive Census variable at this stage, so
+# v_CA21_1 is used only as a dummy vector to make the geography query.
+#
+# geo_uid is especially useful because it provides a stable geographic
+# identifier that can later be matched to the GeoUID in the StatCan table.
+
+qc_geo_cd <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),   # Quebec province code
+  level = "CD",                # Census Division level
+  vectors = "v_CA21_1"         # dummy vector; used only to retrieve geography
+) %>%
+  clean_names() %>%
+  distinct(geo_uid, region_name)
+
+
+# Clean the Census Division names so that they match the region names
+# already used in the survey dataset.
+#
+# Some cancensus region names contain additional information in
+# parentheses. We remove everything from the first opening parenthesis
+# onward, then remove any trailing whitespace.
+
+qc_geo_cd <- qc_geo_cd %>%
+  mutate(
+    census_subdivision = str_remove(region_name, "[(].*"),
+    census_subdivision = str_remove(census_subdivision, "\\s+$")
+  ) %>%
+  select(-region_name)
+
+
+# 2. Connect to Statistics Canada Table 98-10-0216-01
+# ---------------------------------------------------
+#
+# Table 98-10-0216-01 contains 2021 Census information on knowledge
+# of languages, including separate columns for:
+#
+#   - total responses to knowledge of languages
+#   - single-language responses
+#   - multiple-language responses
+#
+# get_cansim_connection() is used instead of get_cansim() because
+# this is a very large table. The connection allows us to filter the
+# data before loading it fully into R memory.
+
+#WARNING This line takes about 15 minutes to run unless you add a local cache space in your computer
+#On October 21 the connection with the canada census server broke, before fixing, making a workarounf from the downloaded table instead of relying on the server
+# knowledge_con <- get_cansim_connection(
+#   "98-10-0216-01"
+# )
+
+# 2. Access the locally cached Statistics Canada table
+# ---------------------------------------------------
+#
+# On October 21, 2026, the cansim API began returning an
+# invalid JSON response, preventing get_cansim_connection()
+# from working.
+#
+# The previously downloaded census table remains available
+# locally in Parquet format.
+#
+# We access it directly through arrow::open_dataset(),
+# bypassing the API without downloading the table again.
+#
+# Like get_cansim_connection(), open_dataset() creates a
+# lazy Arrow dataset, allowing filtering before collect().
+
+knowledge_con <- arrow::open_dataset(
+  "C:/Users/andre/cansim_cache/cansim_98100216_parquet_eng/98100216-eng.parquet"
+)
+
+
+
+
+
+
+# 3. Extract the relevant Quebec Census Division rows
+# ---------------------------------------------------
+#
+# First, rename the very long StatCan column names to shorter,
+# easier-to-read variable names.
+#
+# Then restrict the dataset to:
+#
+#   - all ages combined
+#   - all genders combined
+#   - Census estimates expressed as counts
+#   - the overall "Total - Knowledge of languages" category
+#   - Quebec Census Divisions only
+#
+# Quebec Census Division DGUIDs begin with "2021A000324":
+#   2021 = Census year
+#   24   = Quebec province code
+#   CD   = Census Division geography
+#
+# Filtering is done while the data are still stored as an Arrow query,
+# which avoids loading the full Statistics Canada table into memory.
+
+qc_cd_multilingual_rate <- knowledge_con %>%
+  rename(
+    age = `Age (7)`,
+    gender = `Gender (3)`,
+    statistics = `Statistics (3)`,
+    knowledge_of_languages = `Knowledge of languages (324)`,
+    total_language_responses =
+      `Single and multiple responses of knowledge of languages (3):Total - Single and multiple responses of knowledge of languages[1]`,
+    multiple_language_responses =
+      `Single and multiple responses of knowledge of languages (3):Multiple responses of knowledge of languages[3]`
+  ) %>%
+
+  filter(
+    age == "Total - Age",
+    gender == "Total - Gender",
+    statistics == "Count",
+    knowledge_of_languages == "Total - Knowledge of languages",
+
+    # Keep Quebec Census Divisions only
+    str_starts(DGUID, "2021A000324")
+  ) %>%
+
+  select(
+    GEO,
+    DGUID,
+    GeoUID,
+    total_language_responses,
+    multiple_language_responses
+  ) %>%
+
+  # Only after filtering to the small subset we need do we load
+  # the data into R as a regular tibble.
+  collect()
+
+
+# 4. Calculate the regional multilingualism rate
+# ----------------------------------------------
+#
+# "Multiple responses of knowledge of languages" represents people
+# reporting knowledge of more than one language.
+#
+# Dividing that count by the total number of knowledge-of-language
+# responses gives the estimated proportion of the population in
+# private households who know multiple languages within each
+# Census Division.
+#
+# The result is stored as a proportion:
+#   e.g., 0.42 = approximately 42% multilingual.
+
+qc_cd_multilingual_rate <- qc_cd_multilingual_rate %>%
+  mutate(
+    multilingual_rate =
+      multiple_language_responses / total_language_responses
+  )
+
+
+# 5. Match the StatCan multilingualism estimates to our Quebec
+#    Census Division lookup table
+# ------------------------------------------------------------
+#
+# GeoUID in the cansim table corresponds to geo_uid from cancensus.
+#
+# Joining by the geographic ID is preferable to joining by region name,
+# because IDs are stable and avoid problems caused by accents,
+# punctuation, spelling differences, or formatting.
+
+# 5. Match StatCan multilingualism estimates to Census Divisions
+# ------------------------------------------------------------
+
+# 5. Match StatCan multilingualism estimates to Census Divisions
+# ------------------------------------------------------------
+
+cd_multilingual_rate <- qc_geo_cd %>%
+  left_join(
+    qc_cd_multilingual_rate %>%
+      transmute(
+        geo_uid = as.character(GeoUID),
+        multilingual_rate
+      ),
+    by = "geo_uid"
+  )
+#sanity check after the october 21st issues
+
+# Check how many Census Divisions received a multilingualism rate
+cd_multilingual_rate %>%
+  summarise(
+    n_regions = n(),
+    n_matched = sum(!is.na(multilingual_rate)),
+    n_missing = sum(is.na(multilingual_rate)),
+    min_rate = min(multilingual_rate, na.rm = TRUE),
+    max_rate = max(multilingual_rate, na.rm = TRUE)
+  )
+
+
+
+# 6. Merge the regional multilingualism rate into the survey data
+# ---------------------------------------------------------------
+#
+# Each survey participant already has a census_subdivision variable.
+# We therefore attach the Census Division-level multilingualism rate
+# by matching participants to their Census Division.
+#
+# All participants living in the same Census Division receive the same
+# regional multilingualism-rate value.
+
+# 6. Harmonize geographic names and merge into survey data
+# ------------------------------------------------------------
+
+clean_w_predictors <- clean_w_predictors %>%
+
+  # Remove columns from the previous join
+  select(-any_of(c("multilingual_rate", "geo_uid"))) %>%
+
+  # Standardize survey Census Division names
+  mutate(
+    census_subdivision = case_when(
+      census_subdivision == "Les Îles-de-la-Madeleine" ~
+        "Communauté maritime des Îles-de-la-Madeleine",
+
+      census_subdivision == "Côte-de-Gaspé" ~
+        "La Côte-de-Gaspé",
+
+      TRUE ~ census_subdivision
+    )
+  ) %>%
+
+  # Join using the harmonized names
+  left_join(
+    cd_multilingual_rate,
+    by = "census_subdivision"
+  )
+
+
+#Code check notes: Note that there are 6 children who have missing data for census region, so of course the multilingualism rate and speaker rate below can not be calculated. All these data comes from the first collection wave, presumably becasue the question was not mandatory.
+```
+
+
+```{r adding density of speaker by language}
+
+# ============================================================
+# Create regional speaker rates for languages heard by children
+# using 2021 Census "Knowledge of languages" data
+# ============================================================
+
+
+# 1. Put children's languages into long format
+# ---------------------------------------------
+
+languages_heard <- clean_w_predictors %>%
+  dplyr::select(
+    internal_id,
+    census_subdivision,
+    child_english,
+    child_french,
+    child_first_minority,
+    child_second_minority,
+    child_third_minority,
+    geo_uid
+  ) %>%
+  pivot_longer(
+    cols = child_english:child_third_minority,
+    names_to = "language_type",
+    values_to = "language"
+  ) %>%
+mutate(
+  language = standardize_language(language)
+)
+
+
+# Create a list of the unique languages represented in the survey.
+# This is useful for checking whether our survey labels match the
+# Statistics Canada language labels.
+
+survey_languages <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  arrange(language)
+
+
+
+# ============================================================
+# Retrieve 2021 Census "Knowledge of languages" vectors
+# ============================================================
+
+ca21_vectors <- list_census_vectors("CA21")
+
+
+# v_CA21_3229 is the parent vector for:
+# "Knowledge of languages for the population in private households"
+#
+# This is based on the 2021 Census 25% sample data and contains
+# both official and non-official languages.
+
+knowledge_language_children <- child_census_vectors(
+  "v_CA21_3229",
+  leaves_only = TRUE
+)
+
+
+# Keep only the individual language vectors.
+#
+# Using leaves_only = TRUE removes broad aggregate categories such as
+# "Official languages", "Non-official languages", "Indigenous languages",
+# etc., leaving the most specific language categories available.
+
+language_lookup <- knowledge_language_children %>%
+  select(
+    vector,
+    census_language = label
+  )
+
+
+
+#to avoid breaking the r memory by querying too many languages at once, I will break up the query into batches
+
+language_vectors <- language_lookup$vector
+
+# ============================================================
+# Download the language counts for Quebec Census Divisions
+# ============================================================
+#
+# The Census contains many language vectors, so the vectors are split
+# into batches of 50 to avoid making a very large query at once.
+
+language_vectors <- language_lookup$vector
+
+vector_batches <- split(
+  language_vectors,
+  ceiling(seq_along(language_vectors) / 50)
+)
+
+
+language_batches <- lapply(
+  vector_batches,
+  function(x) {
+    get_census(
+      dataset = "CA21",
+      regions = list(PR = "24"),
+      level = "CD",
+      vectors = x,
+      labels = "short"
+    )
+  }
+)
+
+# Start with the first batch.
+
+qc_cd_languages_wide <- language_batches[[1]]
+
+
+# Add the remaining batches by matching Census Divisions on GeoUID.
+
+if (length(language_batches) > 1) {
+
+  for (i in 2:length(language_batches)) {
+
+    new_cols <- setdiff(
+      names(language_batches[[i]]),
+      names(qc_cd_languages_wide)
+    )
+
+    qc_cd_languages_wide <- qc_cd_languages_wide %>%
+      left_join(
+        language_batches[[i]] %>%
+          select(GeoUID, all_of(new_cols)),
+        by = "GeoUID"
+      )
+  }
+}
+
+
+census_language_cd <- qc_cd_languages_wide %>%
+  pivot_longer(
+    cols = starts_with("v_CA21_"),
+    names_to = "vector",
+    values_to = "language_knowledge_n"
+  )
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    language_lookup,
+    by = "vector"
+  )
+
+
+# ============================================================
+# Retrieve denominator for language knowledge rates
+# ============================================================
+#
+# v_CA21_3229 represents the population in private households
+# covered by the Census "Knowledge of languages" measure.
+#
+# Using this as the denominator ensures that the language-specific
+# counts and the population denominator come from the same Census
+# concept and statistical universe.
+
+cd_population_knowledge <- get_census(
+  dataset = "CA21",
+  regions = list(PR = "24"),
+  level = "CD",
+  vectors = "v_CA21_3229",
+  labels = "short"
+)
+
+
+cd_population_knowledge <- cd_population_knowledge %>%
+  select(
+    GeoUID,
+    knowledge_language_population = v_CA21_3229
+  )
+
+
+
+# ============================================================
+# Calculate regional prevalence of knowledge of each language
+# ============================================================
+
+census_language_cd <- census_language_cd %>%
+  left_join(
+    cd_population_knowledge,
+    by = "GeoUID"
+  ) %>%
+  mutate(
+    language_knowledge_rate =
+      language_knowledge_n / knowledge_language_population,
+
+    language_knowledge_percent =
+      language_knowledge_rate * 100
+  )
+
+
+
+
+#Check language matches
+
+language_crosswalk <- languages_heard %>%
+  distinct(language) %>%
+  filter(!is.na(language)) %>%
+  rename(survey_language = language) %>%
+  mutate(
+    census_language = case_when(
+      survey_language == "Berber" ~ "Berber languages, n.i.e.",
+      survey_language == "Persian" ~ "Persian (Farsi), n.o.s.",
+      survey_language == "Punjabi" ~ "Punjabi (Panjabi)",
+      survey_language == "Malagasy" ~ "Malagasy, n.o.s.",
+      survey_language == "QSL" ~ "Quebec Sign Language",
+      survey_language == "Cree" ~ "Cree, n.o.s.",
+      TRUE ~ survey_language
+    ),
+
+    exact_match =
+      census_language %in% language_lookup$census_language
+  )
+
+
+finding_mismatches<- language_crosswalk %>%
+  filter(!exact_match)
+
+
+
+#final joins
+census_lookup_final <- language_crosswalk %>%
+  select(
+    survey_language,
+    census_language
+  ) %>%
+  left_join(
+    census_language_cd,
+    by = "census_language"
+  )
+
+
+data_clean_long <- languages_heard %>%
+  left_join(
+    census_lookup_final %>%
+      select(
+        survey_language,
+        GeoUID,
+        language_knowledge_n,
+        knowledge_language_population,
+        language_knowledge_rate,
+        language_knowledge_percent
+      ),
+    by = c(
+      "language" = "survey_language",
+      "geo_uid" = "GeoUID"
+    )
+  )
+
+data_clean_long <- data_clean_long %>%
+  filter(!is.na(language)) %>%
+  select(-language_type)
+
+#Join this to our data frame to have all the predictors in place
+ long_with_predictors<- clean_w_predictors %>%
+   left_join(data_clean_long, by=c("internal_id", "census_subdivision", "geo_uid"))
+
+
+
+```
+
+GUARDRAIL CHECK
+```{r making sure all the data has the expected quality before moving to analysis}
+
+
+# Final participant-level integrity check
+stopifnot(
+  nrow(clean_w_predictors) ==
+    n_distinct(clean_w_predictors$internal_id),
+
+  all(clean_w_predictors$child_age_years >= 3 &
+      clean_w_predictors$child_age_years < 9),
+
+  !anyNA(clean_w_predictors$internal_id)
+)
+
+
+
+```
+
+
+Language specific analyses
+```{r correlation analyses language specific}
+
+
+# ============================================================
+# LANGUAGE-SPECIFIC SPEARMAN CORRELATIONS
+# English, French, and minority languages
+#
+# Outputs:
+# 1. Correlation matrices
+# 2. Exact p-value matrices
+# 3. Pairwise sample-size matrices
+# 4. Corrplot visualizations
+# 5. Three Word tables with significance stars
+# 6. One combined Word document
+# ============================================================
+
+
+
+# ============================================================
+# 1. PREPARE DATA FOR ENGLISH AND FRENCH
+# ============================================================
+
+for_correlation_long <- long_with_predictors %>%
+  select(
+    internal_id,
+    child_age_years,
+    language,
+    language_knowledge_rate,
+    overall_exposure_english_child,
+    overall_exposure_french_child,
+    book_resources_english,
+    book_resources_french,
+    caregiver_english_book_reading,
+    caregiver_french_book_reading,
+    caregiver_sources_english,
+    caregiver_sources_french,
+    beleifs_ahead_in_life,
+    beleifs_belonging,
+    beliefs_cognitive_benefits,
+    worry_master_languages,
+    worry_cognitive_difficulties,
+    worry_school_difficulties,
+    child_french_active_use_category,
+    child_english_active_use_category,
+    child_french_interlocutor_matching,
+    child_english_interlocutor_matching
+  )
+
+
+# ------------------------------------------------------------
+# English data
+# ------------------------------------------------------------
+
+english_cor_data <- for_correlation_long %>%
+  filter(language == "English") %>%
+  distinct(internal_id, .keep_all = TRUE) %>%
+  select(
+    child_age_years,
+    beleifs_ahead_in_life,
+    beleifs_belonging,
+    beliefs_cognitive_benefits,
+    worry_master_languages,
+    worry_cognitive_difficulties,
+    worry_school_difficulties,
+    child_english_active_use_category,
+    language_knowledge_rate,
+    overall_exposure_english_child,
+    book_resources_english,
+    caregiver_sources_english,
+    caregiver_english_book_reading,
+    child_english_interlocutor_matching
+  )
+
+
+# ------------------------------------------------------------
+# French data
+# ------------------------------------------------------------
+
+french_cor_data <- for_correlation_long %>%
+  filter(language == "French") %>%
+  distinct(internal_id, .keep_all = TRUE) %>%
+  select(
+    child_age_years,
+    beleifs_ahead_in_life,
+    beleifs_belonging,
+    beliefs_cognitive_benefits,
+    worry_master_languages,
+    worry_cognitive_difficulties,
+    worry_school_difficulties,
+    child_french_active_use_category,
+    language_knowledge_rate,
+    overall_exposure_french_child,
+    book_resources_french,
+    caregiver_sources_french,
+    caregiver_french_book_reading,
+    child_french_interlocutor_matching
+  )
+
+
+# ============================================================
+# 2. PREPARE MINORITY-LANGUAGE DATA
+# ============================================================
+
+minority_long <- clean_w_predictors %>%
+
+  rename(
+    # Language name
+    minority_language_first = child_first_minority,
+    minority_language_second = child_second_minority,
+    minority_language_third = child_third_minority,
+
+    # Exposure
+    minority_overall_exposure_first =
+      overall_exposure_first_min_child,
+    minority_overall_exposure_second =
+      overall_exposure_second_min_child,
+    minority_overall_exposure_third =
+      overall_exposure_third_min_child,
+
+    # Book resources
+    minority_book_resources_first =
+      book_resources_first_minority,
+    minority_book_resources_second =
+      book_resources_second_minority,
+    minority_book_resources_third =
+      book_resources_third_minority,
+
+    # Book reading
+    minority_book_reading_first =
+      caregiver_first_min_book_reading,
+    minority_book_reading_second =
+      caregiver_second_min_book_reading,
+    minority_book_reading_third =
+      caregiver_third_min_book_reading,
+
+    # Active use
+    minority_active_use_first =
+      child_first_min_active_use_category,
+    minority_active_use_second =
+      child_second_min_active_use_category,
+    minority_active_use_third =
+      child_third_min_active_use_category,
+
+    # Interlocutor matching
+    minority_interlocutor_matching_first =
+      child_first_min_interlocutor_matching,
+    minority_interlocutor_matching_second =
+      child_second_min_interlocutor_matching,
+    minority_interlocutor_matching_third =
+      child_third_min_interlocutor_matching,
+
+    # Caregiver sources
+    minority_sources_first =
+      caregiver_sources_first_minority,
+    minority_sources_second =
+      caregiver_sources_second_minority,
+    minority_sources_third =
+      caregiver_sources_third_minority
+  ) %>%
+
+  pivot_longer(
+    cols = matches(
+      "^minority_(language|overall_exposure|book_resources|book_reading|sources|active_use|interlocutor_matching)_(first|second|third)$"
+    ),
+    names_to = c(".value", "minority_order"),
+    names_pattern = "(.+)_(first|second|third)$"
+  ) %>%
+
+  mutate(
+    minority_language =
+      standardize_language(minority_language)
+  ) %>%
+
+  filter(
+    !is.na(minority_language),
+    minority_language != ""
+  )
+
+
+# ------------------------------------------------------------
+# Match minority languages to census speaker rates
+# ------------------------------------------------------------
+
+language_rates <- data_clean_long %>%
+  select(
+    internal_id,
+    census_subdivision,
+    geo_uid,
+    language,
+    language_knowledge_rate
+  ) %>%
+  distinct()
+
+
+# Check for duplicate join keys, which could inflate the sample
+duplicate_rates <- language_rates %>%
+  count(
+    internal_id,
+    census_subdivision,
+    geo_uid,
+    language
+  ) %>%
+  filter(n > 1)
+
+if (nrow(duplicate_rates) > 0) {
+  stop(
+    "Multiple census-rate matches for some languages. ",
+    "Inspect duplicate_rates before proceeding."
+  )
+}
+
+
+minority_cor_data <- minority_long %>%
+  left_join(
+    language_rates,
+    by = c(
+      "internal_id",
+      "census_subdivision",
+      "geo_uid",
+      "minority_language" = "language"
+    ),
+    relationship = "many-to-one"
+  )
+
+# Existing caveat:
+# Check the Creole participant with missing speaker rate.
+# Other missing rates may reflect languages absent from
+# the corresponding census subdivision.
+
+
+minority_cor_data_matrix <- minority_cor_data %>%
+  select(
+    child_age_years,
+    beleifs_ahead_in_life,
+    beleifs_belonging,
+    beliefs_cognitive_benefits,
+    worry_master_languages,
+    worry_cognitive_difficulties,
+    worry_school_difficulties,
+    minority_active_use,
+    language_knowledge_rate,
+    minority_overall_exposure,
+    minority_book_resources,
+    minority_book_reading,
+    minority_interlocutor_matching,
+    minority_sources
+  )
+
+
+# ============================================================
+# 3. DEFINE A FUNCTION FOR ALL THREE CORRELATION MATRICES
+# ============================================================
+
+# This function:
+# - Calculates Spearman correlations
+# - Obtains p-values and pairwise sample sizes
+# - Adds significance stars
+# - Creates a lower-triangular Word table
+# - Creates a corrplot
+#
+# Significance thresholds:
+# *   p < .05
+# **  p < .01
+# *** p < .001
+#
+# No multiple-comparison adjustment is applied,
+# consistent with the previous correlation analysis.
+
+
+run_language_correlations <- function(data, language_name) {
+
+  # ----------------------------------------------------------
+  # A. Ensure variables are numeric
+  # ----------------------------------------------------------
+
+  # Factor variables are converted through character first
+  # to avoid accidentally using their underlying factor codes.
+  # Numeric category codes should therefore be stored as
+  # numeric values or numeric strings.
+
+  data_numeric <- data %>%
+    mutate(
+      across(
+        everything(),
+        ~ if (is.factor(.x)) {
+          suppressWarnings(as.numeric(as.character(.x)))
+        } else {
+          suppressWarnings(as.numeric(.x))
+        }
+      )
+    )
+
+  # Prevent silent conversion of valid observations to NA
+  original_nonmissing <- data %>%
+    summarise(across(everything(), ~ sum(!is.na(.x)))) %>%
+    unlist(use.names = TRUE)
+
+  converted_nonmissing <- data_numeric %>%
+    summarise(across(everything(), ~ sum(!is.na(.x)))) %>%
+    unlist(use.names = TRUE)
+
+  if (any(converted_nonmissing < original_nonmissing)) {
+    stop(
+      language_name,
+      ": Numeric conversion introduced missing values. ",
+      "Check categorical variable coding."
+    )
+  }
+
+  # ----------------------------------------------------------
+  # B. Calculate Spearman correlations and p-values
+  # ----------------------------------------------------------
+
+  cor_results <- psych::corr.test(
+    data_numeric,
+    use = "pairwise",
+    method = "spearman",
+    adjust = "none"
+  )
+
+  r_matrix <- cor_results$r
+  p_matrix <- cor_results$p
+  n_matrix <- cor_results$n
+
+  # ----------------------------------------------------------
+  # C. Create a matrix with significance stars
+  # ----------------------------------------------------------
+
+  stars <- matrix(
+    "",
+    nrow = nrow(p_matrix),
+    ncol = ncol(p_matrix),
+    dimnames = dimnames(p_matrix)
+  )
+
+  stars[!is.na(p_matrix) & p_matrix < .05] <- "*"
+  stars[!is.na(p_matrix) & p_matrix < .01] <- "**"
+  stars[!is.na(p_matrix) & p_matrix < .001] <- "***"
+
+  formatted_matrix <- matrix(
+    "",
+    nrow = nrow(r_matrix),
+    ncol = ncol(r_matrix),
+    dimnames = dimnames(r_matrix)
+  )
+
+  valid <- !is.na(r_matrix)
+
+  formatted_matrix[valid] <- paste0(
+    sprintf("%.3f", r_matrix[valid]),
+    stars[valid]
+  )
+
+  # Remove upper triangle and diagonal
+  formatted_matrix[upper.tri(formatted_matrix, diag = TRUE)] <- ""
+
+  # ----------------------------------------------------------
+  # D. Generate manuscript-friendly variable labels
+  # ----------------------------------------------------------
+
+  pretty_labels <- c(
+    child_age_years = "Child age",
+    beleifs_ahead_in_life = "Beliefs: Ahead in life",
+    beleifs_belonging = "Beliefs: Belonging",
+    beliefs_cognitive_benefits =
+      "Beliefs: Cognitive benefits",
+    worry_master_languages =
+      "Worry: Mastering languages",
+    worry_cognitive_difficulties =
+      "Worry: Cognitive difficulties",
+    worry_school_difficulties =
+      "Worry: School difficulties",
+
+    child_english_active_use_category = "Active use",
+    child_french_active_use_category = "Active use",
+    minority_active_use = "Active use",
+
+    language_knowledge_rate = "Regional speaker rate",
+
+    overall_exposure_english_child = "Language exposure",
+    overall_exposure_french_child = "Language exposure",
+    minority_overall_exposure = "Language exposure",
+
+    book_resources_english = "Book resources",
+    book_resources_french = "Book resources",
+    minority_book_resources = "Book resources",
+
+    caregiver_sources_english = "Caregiver sources",
+    caregiver_sources_french = "Caregiver sources",
+    minority_sources = "Caregiver sources",
+
+    caregiver_english_book_reading = "Book reading",
+    caregiver_french_book_reading = "Book reading",
+    minority_book_reading = "Book reading",
+
+    child_english_interlocutor_matching =
+      "Interlocutor matching",
+    child_french_interlocutor_matching =
+      "Interlocutor matching",
+    minority_interlocutor_matching =
+      "Interlocutor matching"
+  )
+
+  variable_names <- colnames(r_matrix)
+
+  display_names <- unname(pretty_labels[variable_names])
+
+  # Use original variable name if no pretty label exists
+  display_names[is.na(display_names)] <-
+    variable_names[is.na(display_names)]
+
+  # ----------------------------------------------------------
+  # E. Build Word table
+  # ----------------------------------------------------------
+
+  # Numbered column headings reduce table width
+  # and match conventional correlation-table formatting.
+
+  table_data <- as.data.frame(
+    formatted_matrix,
+    check.names = FALSE
+  )
+
+  colnames(table_data) <- as.character(
+    seq_along(variable_names)
+  )
+
+  table_data <- tibble(
+    Variable = paste0(
+      seq_along(variable_names),
+      ". ",
+      display_names
+    )
+  ) %>%
+    bind_cols(table_data)
+
+  # Make a Word-friendly flextable
+  word_table <- flextable(table_data) %>%
+
+    theme_booktabs() %>%
+
+    fontsize(size = 8, part = "all") %>%
+
+    bold(part = "header") %>%
+
+    align(
+      j = 2:ncol(table_data),
+      align = "center",
+      part = "all"
+    ) %>%
+
+    align(
+      j = 1,
+      align = "left",
+      part = "all"
+    ) %>%
+
+    width(j = 1, width = 2.6) %>%
+
+    width(
+      j = 2:ncol(table_data),
+      width = 0.48
+    ) %>%
+
+    padding(
+      padding = 3,
+      part = "all"
+    ) %>%
+
+    add_footer_lines(
+      values = paste0(
+        "Note. Spearman's rho. ",
+        "* p < .05, ** p < .01, *** p < .001. ",
+        "Two-sided, unadjusted p-values. ",
+        "Pairwise deletion of missing observations."
+      )
+    ) %>%
+
+    fontsize(
+      size = 8,
+      part = "footer"
+    ) %>%
+
+    italic(part = "footer") %>%
+
+    set_table_properties(
+      layout = "fixed"
+    )
+
+  # ----------------------------------------------------------
+  # F. Create corrplot
+  # ----------------------------------------------------------
+
+  corrplot(
+    r_matrix,
+    method = "circle",
+    type = "upper",
+    diag = TRUE,
+    tl.col = "black",
+    tl.srt = 45,
+    p.mat = p_matrix,
+    sig.level = 0.05,
+    insig = "pch",
+    pch = "x",
+    pch.col = "grey50"
+  )
+
+  title(
+    main = paste(
+      language_name,
+      "Spearman correlations"
+    ),
+    line = 2
+  )
+
+  # ----------------------------------------------------------
+  # G. Return all objects
+  # ----------------------------------------------------------
+
+  return(
+    list(
+      correlations = r_matrix,
+      p_values = p_matrix,
+      sample_sizes = n_matrix,
+      formatted = formatted_matrix,
+      table = word_table
+    )
+  )
+}
+
+
+# ============================================================
+# 4. RUN CORRELATIONS FOR EACH LANGUAGE
+# ============================================================
+
+english_results <- run_language_correlations(
+  english_cor_data,
+  "English"
+)
+
+french_results <- run_language_correlations(
+  french_cor_data,
+  "French"
+)
+
+minority_results <- run_language_correlations(
+  minority_cor_data_matrix,
+  "Minority languages"
+)
+
+
+# ============================================================
+# 5. EXTRACT MATRICES FOR INSPECTION
+# ============================================================
+
+# Correlation coefficients
+english_correlation <- english_results$correlations
+french_correlation <- french_results$correlations
+minority_correlation <- minority_results$correlations
+
+# P-values
+english_p <- english_results$p_values
+french_p <- french_results$p_values
+minority_p <- minority_results$p_values
+
+# Pairwise sample sizes
+english_n <- english_results$sample_sizes
+french_n <- french_results$sample_sizes
+minority_n <- minority_results$sample_sizes
+
+
+# View correlation matrices with stars
+english_results$formatted
+french_results$formatted
+minority_results$formatted
+
+
+# ============================================================
+# 6. GENERATE THREE WORD TABLES
+# ============================================================
+
+# Landscape orientation to accommodate 14 variables
+
+landscape_section <- officer::prop_section(
+  page_size = officer::page_size(
+    orient = "landscape"
+  )
+)
+
+
+# English
+flextable::save_as_docx(
+  "English correlations" = english_results$table,
+  path = "English_Correlations.docx",
+  pr_section = landscape_section
+)
+
+
+# French
+flextable::save_as_docx(
+  "French correlations" = french_results$table,
+  path = "French_Correlations.docx",
+  pr_section = landscape_section
+)
+
+
+# Minority languages
+flextable::save_as_docx(
+  "Minority-language correlations" = minority_results$table,
+  path = "Minority_Correlations.docx",
+  pr_section = landscape_section
+)
+
+
+# ============================================================
+# 7. OPTIONAL: EXPORT ALL THREE TABLES IN ONE DOCUMENT
+# ============================================================
+
+flextable::save_as_docx(
+  "English correlations" = english_results$table,
+  "French correlations" = french_results$table,
+  "Minority-language correlations" = minority_results$table,
+  path = "All_Language_Correlations.docx",
+  pr_section = landscape_section
+)
+
+
+# ============================================================
+# 8. QUALITY CHECKS
+# ============================================================
+
+# Number of rows contributing to each language matrix
+tibble(
+  Language = c("English", "French", "Minority"),
+  N_rows = c(
+    nrow(english_cor_data),
+    nrow(french_cor_data),
+    nrow(minority_cor_data_matrix)
+  ),
+  N_unique_children = c(
+    n_distinct(
+      for_correlation_long$internal_id[
+        for_correlation_long$language == "English"
+      ]),
+    n_distinct(
+      for_correlation_long$internal_id[
+        for_correlation_long$language == "French"
+      ]),
+    n_distinct(minority_cor_data$internal_id)
+  )
+)
+
+
+# Check range of pairwise sample sizes
+range(english_n, na.rm = TRUE)
+range(french_n, na.rm = TRUE)
+range(minority_n, na.rm = TRUE)
+
+
+# Count significant correlations in lower triangle
+count_significant <- function(p_matrix) {
+
+  p <- p_matrix[lower.tri(p_matrix)]
+  p <- p[!is.na(p)]
+
+  tibble(
+    N_tests = length(p),
+    p_below_05 = sum(p < .05),
+    p_below_01 = sum(p < .01),
+    p_below_001 = sum(p < .001)
+  )
+}
+
+bind_rows(
+  English = count_significant(english_p),
+  French = count_significant(french_p),
+  Minority = count_significant(minority_p),
+  .id = "Language"
+)
+
+
+
+
+#==================================
+#GRAPH FOR ONLY OUTCOMES AND PREDICTORS
+extract_outcome_cor <- function(cor_matrix, outcome_var, language_group, outcome_label) {
+  
+  vals <- cor_matrix[outcome_var, , drop = TRUE]
+  
+  tibble(
+    predictor = names(vals),
+    correlation = as.numeric(vals),
+    language_group = language_group,
+    outcome = outcome_label
+  )
+}
+
+
+#extract active use
+
+active_use_corrs <- bind_rows(
+  extract_outcome_cor(
+    english_correlation,
+    "child_english_active_use_category",
+    "English",
+    "Active language use"
+  ),
+  
+  extract_outcome_cor(
+    french_correlation,
+    "child_french_active_use_category",
+    "French",
+    "Active language use"
+  ),
+  
+  extract_outcome_cor(
+    minority_correlation,
+    "minority_active_use",
+    "Minority",
+    "Active language use"
+  )
+)
+
+
+
+#Extract interlocutor matching
+interlocutor_corrs <- bind_rows(
+  extract_outcome_cor(
+    english_correlation,
+    "child_english_interlocutor_matching",
+    "English",
+    "Interlocutor matching"
+  ),
+  
+  extract_outcome_cor(
+    french_correlation,
+    "child_french_interlocutor_matching",
+    "French",
+    "Interlocutor matching"
+  ),
+  
+  extract_outcome_cor(
+    minority_correlation,
+    "minority_interlocutor_matching",
+    "Minority",
+    "Interlocutor matching"
+  )
+)
+
+#combine them
+cor_plot_data <- bind_rows(
+  active_use_corrs,
+  interlocutor_corrs
+)
+
+#remove from predictors list
+
+cor_plot_data <- cor_plot_data %>%
+  filter(
+    !predictor %in% c(
+      "child_english_active_use_category",
+      "child_french_active_use_category",
+      "minority_active_use",
+      "child_english_interlocutor_matching",
+      "child_french_interlocutor_matching",
+      "minority_interlocutor_matching"
+    )
+  )
+
+#Have names match
+cor_plot_data <- cor_plot_data %>%
+  mutate(
+    predictor = case_when(
+      
+      predictor == "child_age_years" ~ "Child age",
+      
+      predictor == "language_knowledge_rate" ~ "Speaker rate",
+      
+      predictor %in% c(
+        "overall_exposure_english_child",
+        "overall_exposure_french_child",
+        "minority_overall_exposure"
+      ) ~ "Overall exposure",
+      
+      predictor %in% c(
+        "book_resources_english",
+        "book_resources_french",
+        "minority_book_resources"
+      ) ~ "Access to books",
+      
+      predictor %in% c(
+        "caregiver_english_book_reading",
+        "caregiver_french_book_reading",
+        "minority_book_reading"
+      ) ~ "Book reading",
+      
+      predictor == "beleifs_ahead_in_life" ~ "Status attitudes",
+      predictor == "beleifs_belonging" ~ "Solidarity attitudes",
+      predictor == "beliefs_cognitive_benefits" ~ "Cognition attitudes",
+      
+      predictor == "worry_master_languages" ~ "Exposure-fluency concern",
+      predictor == "worry_cognitive_difficulties" ~ "Cognitive difficulties concern",
+      predictor == "worry_school_difficulties" ~ "School difficulties concern",
+      
+
+        predictor %in% c(
+        "caregiver_sources_english",
+        "caregiver_sources_french",
+        "minority_sources"
+      ) ~ "Number of sources",
+      
+      TRUE ~ predictor
+    )
+  )
+
+
+
+
+
+
+#Order predictors nicely
+
+predictor_order<- c(
+  "Child age",
+  "Speaker rate",
+  "Access to books",
+  "Overall exposure",
+  "Book reading",
+ "Number of sources",
+"Status attitudes",
+"Solidarity attitudes",
+"Cognition attitudes",
+"Exposure-fluency concern",
+"Cognitive difficulties concern",
+"School difficulties concern"
+)
+
+cor_plot_data <- cor_plot_data %>%
+  mutate(
+    predictor = factor(
+      predictor,
+      levels = rev(predictor_order)
+    )
+  )
+
+#Make bubble plot
+
+correlation_bubble_plot<- ggplot(
+  cor_plot_data,
+  aes(
+    x = language_group,
+    y = predictor,
+    size = abs(correlation),
+    fill = correlation
+  )
+) +
+  geom_point(
+    shape = 21,
+    color = "black"
+  ) +
+  scale_size(
+    range = c(2, 7),
+    limits = c(0, 1)
+  ) +
+  scale_fill_gradient2(
+    low = "firebrick3",
+    mid = "white",
+    high = "steelblue4",
+    midpoint = 0,
+    limits = c(-1, 1)
+  ) +
+  facet_wrap(
+    ~ outcome,
+    ncol = 1
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    size = "|r|",
+    fill = "r"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid = element_blank(),
+    strip.text = element_text(
+      face = "bold",
+      size = 14
+    ),
+    axis.text.x = element_text(
+      face = "bold"
+    ),
+    legend.position = "right"
+  )
+
+
+ggsave(
+  filename = here("Figures", "correlation_bubble_plot.png"),
+  plot = correlation_bubble_plot,
+  width = 10,
+  height = 7,
+  units = "in",
+  dpi = 600,
+  bg = "white"
+)
+
+
+
+
+
+
+
+
+
+
+```
+
+```{r hirarchical linear mixed effects models}
+
+# ============================================================
+# CREATE LONG DATASET FOR MIXED MODELS
+# One row = one child × language
+# ============================================================
+
+# ------------------------------------------------------------
+# ENGLISH
+# ------------------------------------------------------------
+
+english_model_data <- long_with_predictors %>%
+  filter(language == "English") %>%
+  distinct(internal_id, .keep_all = TRUE) %>%
+  transmute(
+    internal_id,
+    language,
+    language_type = "Community",
+    child_age_years,
+
+    # Outcomes
+    active_use = child_english_active_use_category,
+    interlocutor_matching = child_english_interlocutor_matching,
+
+    # Language-specific predictors
+    overall_exposure = overall_exposure_english_child,
+    speaker_rate = language_knowledge_rate,
+    book_resources = book_resources_english,
+    book_reading = caregiver_english_book_reading,
+    number_sources= caregiver_sources_english,
+
+    # Child/family-level predictors
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
+    
+  )
+
+
+# ------------------------------------------------------------
+# FRENCH
+# ------------------------------------------------------------
+
+french_model_data <- long_with_predictors %>%
+  filter(language == "French") %>%
+  distinct(internal_id, .keep_all = TRUE) %>%
+  transmute(
+    internal_id,
+    language,
+    language_type = "Community",
+    child_age_years,
+
+    # Outcomes
+    active_use = child_french_active_use_category,
+    interlocutor_matching = child_french_interlocutor_matching,
+
+    # Language-specific predictors
+    overall_exposure = overall_exposure_french_child,
+    speaker_rate = language_knowledge_rate,
+    book_resources = book_resources_french,
+    book_reading = caregiver_french_book_reading,
+     number_sources= caregiver_sources_french,
+
+    # Child/family-level predictors
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
+  )
+
+
+# ------------------------------------------------------------
+# MINORITY LANGUAGES
+# ------------------------------------------------------------
+
+minority_model_data <- minority_cor_data %>%
+  transmute(
+    internal_id,
+    language = minority_language,
+    language_type = "Heritage",
+    child_age_years,
+
+    # Outcomes
+    active_use = minority_active_use,
+    interlocutor_matching = minority_interlocutor_matching,
+
+    # Language-specific predictors
+    overall_exposure = minority_overall_exposure,
+    speaker_rate = language_knowledge_rate,
+    book_resources = minority_book_resources,
+    book_reading = minority_book_reading,
+     number_sources= minority_sources,
+
+    # Child/family-level predictors
+   #  status_attitudes = beleifs_ahead_in_life,
+   #  solidarity_attitudes = beleifs_belonging,
+   #  cognition_attitudes = beliefs_cognitive_benefits,
+   #   exposure_fluency_concern = worry_master_languages,
+   #  concern_cognitive_difficulties = worry_cognitive_difficulties,
+   # concern_school_difficulties = worry_school_difficulties  
+  )
+
+
+
+# ------------------------------------------------------------
+# COMBINE DATASETS AND CLASSIFY LANGUAGE TYPE
+# ------------------------------------------------------------
+#Code check note: this code overrides the previous language type assignments since some children had English or French as their minority language. The code below does a true assignment based on the language, not based on where parents classified each language.
+
+model_data_long <- bind_rows(
+  english_model_data,
+  french_model_data,
+  minority_model_data
+) %>%
+  mutate(
+    language_type = case_when(
+      language %in% c("English", "French") ~ "Community",
+      !is.na(language) ~ "Heritage",
+      TRUE ~ NA_character_
+    ),
+
+    language_type = factor(
+      language_type,
+      levels = c("Community", "Heritage")
+    )
+  )
+
+
+
+# ------------------------------------------------------------
+# PLOT RELATIONSHIP BETWEEN OUTCOMES
+# ------------------------------------------------------------
+
+outcomes_plot_data <- model_data_long %>%
+  select(
+    internal_id,
+    language_type,
+    active_use,
+    interlocutor_matching
+  ) %>%
+  drop_na(
+    active_use,
+    interlocutor_matching
+  )
+
+outcomes_plot <- ggplot(
+  outcomes_plot_data,
+  aes(
+    x = active_use,
+    y = interlocutor_matching
+  )
+) +
+
+  # Individual observations
+  geom_jitter(
+    aes(color = language_type),
+    width = 0.12,
+    height = 1.5,
+    alpha = 0.45,
+    size = 2.5
+  ) +
+
+  # Linear relationship
+  geom_smooth(
+    method = "lm",
+    se = FALSE,
+    color = "#333333",
+    linewidth = 1.2,
+    linetype = "dashed"
+  ) +
+
+  # Nonlinear relationship
+  geom_smooth(
+    method = "loess",
+    formula = y ~ x,
+    se = FALSE,
+    color = "#D66A65",
+    linewidth = 1.3
+  ) +
+
+  scale_color_manual(
+    values = c(
+      "English" = "#B0DA87",
+      "French" = "#8DAEE1",
+      "Minority" = "#D5A0CF"
+    )
+  ) +
+
+  labs(
+    x = "Active language use",
+    y = "Interlocutor matching (%)",
+    color = "Language type"
+  ) +
+
+  theme_classic(base_size = 16) +
+
+  theme(
+    legend.position = "top",
+    axis.text = element_text(size = 14),
+    axis.title = element_text(size = 16)
+  )
+
+outcomes_plot
+# ============================================================
+# 1. Build base model for both outcomes
+
+#a. Standardize predictors
+
+
+model_data_long <- model_data_long %>%
+  mutate(
+    across(
+      c(
+        overall_exposure,
+        child_age_years,
+        speaker_rate,
+        book_resources,
+        book_reading,
+        number_sources,
+        # status_attitudes,
+        # solidarity_attitudes,
+        # cognition_attitudes,
+        # exposure_fluency_concern,
+        # concern_cognitive_difficulties,
+        # concern_school_difficulties
+      ),
+      ~ as.numeric(scale(.x)),
+      .names = "{.col}_z"
+    )
+  )
+
+#b. creating match databases so that the models are comparable 
+
+all_predictors <- c(
+  "overall_exposure_z",
+  "child_age_years_z",
+  "speaker_rate_z",
+  "book_resources_z",
+  "book_reading_z",
+  "number_sources_z"
+)
+
+
+# Dataset for active use
+active_data <- model_data_long %>%
+  drop_na(
+    internal_id,
+    active_use,
+    all_of(all_predictors)
+  )
+
+# Dataset for interlocutor matching
+matching_data <- model_data_long %>%
+  drop_na(
+    internal_id,
+    interlocutor_matching,
+    all_of(all_predictors)
+  )
+
+
+
+
+#c. build base models
+active_base <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+performance(active_base)
+
+matching_base <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+performance(matching_base)
+
+# ============================================================
+# 2. add societal layer predictors and compare to base model
+
+#a. Build the models
+active_societal <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(active_societal)
+#exposure and age are significant, societal factors are not
+
+performance(active_societal)
+
+matching_societal <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        speaker_rate_z +
+    book_resources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(matching_societal)
+
+
+# ============================================================
+# 2. build family layer predictor models and compare to base model
+
+active_family <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+summary(active_family)
+
+matching_family <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+
+
+# ============================================================
+# 3. add societal layer predictors and compare to base and single layer models
+
+#a. Build the models
+active_both_layers <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = active_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+summary(active_family)
+
+matching_both_layers <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+        speaker_rate_z +
+    book_resources_z +
+        book_reading_z +
+    number_sources_z +
+    (1 | internal_id),
+  data = matching_data,
+  REML = FALSE,
+  na.action = na.omit
+)
+
+summary(matching_family)
+
+#anovas between base, societal, and family models
+
+anova(active_societal, active_both_layers) 
+anova(active_family, active_both_layers) 
+anova(matching_societal, matching_both_layers) 
+anova(matching_family, matching_both_layers)
+
+
+# ============================================================
+#Let's make a publication ready table of the active use results
+
+
+
+# Models in the desired order
+models_active <- list(
+  "Societal" = active_societal,
+  "Family" = active_family,
+  "Both layers" = active_both_layers
+)
+
+# Rename predictors for publication
+coef_names <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "speaker_rate_z" = "Speaker rate",
+  "book_resources_z" = "Book resources",
+  "book_reading_z" = "Book reading",
+  "number_sources_z" = "Number of language sources"
+)
+
+
+
+gof_active <- data.frame(
+  raw = c(
+    "nobs",
+    "r2.marginal",
+    "r2.conditional",
+    "aic",
+    "bic",
+    "rmse"
+  ),
+  clean = c(
+    "Observations",
+    "Marginal R²",
+    "Conditional R²",
+    "AIC",
+    "BIC",
+    "RMSE"
+  ),
+  fmt = c(0, 3, 3, 1, 1, 3)
+)
+
+
+# Extract random-intercept SD
+get_intercept_sd <- function(model) {
+  as.numeric(
+    attr(VarCorr(model)$internal_id, "stddev")[1]
+  )
+}
+
+# Extract residual SD
+get_residual_sd <- function(model) {
+  sigma(model)
+}
+
+# Create rows for the table
+sd_rows <- data.frame(
+  term = c(
+    "SD (Random intercept: Child)",
+    "SD (Residuals)"
+  ),
+  Societal = c(
+    get_intercept_sd(active_societal),
+    get_residual_sd(active_societal)
+  ),
+  Family = c(
+    get_intercept_sd(active_family),
+    get_residual_sd(active_family)
+  ),
+  `Both layers` = c(
+    get_intercept_sd(active_both_layers),
+    get_residual_sd(active_both_layers)
+  ),
+  check.names = FALSE
+)
+
+# Format to 3 decimal places
+sd_rows[-1] <- lapply(
+  sd_rows[-1],
+  function(x) sprintf("%.3f", x)
+)
+
+# Place these rows after the coefficients
+attr(sd_rows, "position") <- "gof_start"
+
+
+
+# Generate publication-ready table
+
+table_active <- modelsummary(
+  models_active,
+  coef_map = coef_names,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_active,
+  add_rows = sd_rows,
+  output = "flextable"
+)
+
+table_active <- table_active |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_active
+
+
+
+save_as_docx(
+  "Table 1. Linear mixed-effects models predicting active language use" =
+    table_active,
+  path = "active_use_models.docx"
+)
+
+# ============================================================
+#Let's make a publication ready table of the matching results
+
+
+# Models in the desired order
+models_matching <- list(
+  "Societal" = matching_societal,
+  "Family" = matching_family,
+  "Both layers" = matching_both_layers
+)
+
+# Rename predictors for publication
+coef_names <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "speaker_rate_z" = "Speaker rate",
+  "book_resources_z" = "Book resources",
+  "book_reading_z" = "Book reading",
+  "number_sources_z" = "Number of language sources"
+)
+
+
+
+gof_matching <- data.frame(
+  raw = c(
+    "nobs",
+    "r2.marginal",
+    "r2.conditional",
+    "aic",
+    "bic",
+    "rmse"
+  ),
+  clean = c(
+    "Observations",
+    "Marginal R²",
+    "Conditional R²",
+    "AIC",
+    "BIC",
+    "RMSE"
+  ),
+  fmt = c(0, 3, 3, 1, 1, 3)
+)
+
+
+# Extract random-intercept SD
+get_intercept_sd <- function(model) {
+  as.numeric(
+    attr(VarCorr(model)$internal_id, "stddev")[1]
+  )
+}
+
+# Extract residual SD
+get_residual_sd <- function(model) {
+  sigma(model)
+}
+
+# Create rows for the table
+sd_rows <- data.frame(
+  term = c(
+    "SD (Random intercept: Child)",
+    "SD (Residuals)"
+  ),
+  Societal = c(
+    get_intercept_sd(matching_societal),
+    get_residual_sd(matching_societal)
+  ),
+  Family = c(
+    get_intercept_sd(matching_family),
+    get_residual_sd(matching_family)
+  ),
+  `Both layers` = c(
+    get_intercept_sd(matching_both_layers),
+    get_residual_sd(matching_both_layers)
+  ),
+  check.names = FALSE
+)
+
+# Format to 3 decimal places
+sd_rows[-1] <- lapply(
+  sd_rows[-1],
+  function(x) sprintf("%.3f", x)
+)
+
+# Place these rows after the coefficients
+attr(sd_rows, "position") <- "gof_start"
+
+
+
+# Generate publication-ready table
+
+table_matching <- modelsummary(
+  models_matching,
+  coef_map = coef_names,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_matching,
+  add_rows = sd_rows,
+  output = "flextable"
+)
+
+table_matching <- table_matching |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_matching
+
+
+save_as_docx(
+  "Table 2. Linear mixed-effects models predicting language matching" =
+    table_matching,
+  path = "language_matching_models.docx"
+)
+
+
+
+
+
+
+# ============================================================
+# RUN INTERACTION MODELS
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Prepare data
+# ------------------------------------------------------------
+
+interaction_data <- model_data_long %>%
+  mutate(
+    language_type = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    )
+  ) %>%
+  filter(!is.na(language_type))
+
+# ------------------------------------------------------------
+# 2. ACTIVE LANGUAGE USE
+# ------------------------------------------------------------
+
+# Complete cases for all predictors
+
+active_int_data <- interaction_data %>%
+  drop_na(
+    active_use,
+    overall_exposure_z,
+    child_age_years_z,
+    speaker_rate_z,
+    book_resources_z,
+    book_reading_z,
+    number_sources_z,
+    language_type,
+    internal_id
+  )
+
+# Main-effects model: both layers
+
+active_main <- lmer(
+  active_use ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    book_reading_z +
+    number_sources_z +
+    language_type +
+    (1 | internal_id),
+  data = active_int_data,
+  REML = FALSE
+)
+
+# Full interaction model:
+# All environmental predictors interact with language type
+
+active_interaction <- lmer(
+  active_use ~
+    overall_exposure_z * language_type +
+    speaker_rate_z * language_type +
+    book_resources_z * language_type +
+    book_reading_z * language_type +
+    number_sources_z * language_type +
+    child_age_years_z +
+    (1 | internal_id),
+  data = active_int_data,
+  REML = FALSE
+)
+
+# Compare models
+anova(active_main, active_interaction)
+
+# Inspect coefficients
+summary(active_interaction)
+
+# ------------------------------------------------------------
+# 3. INTERLOCUTOR MATCHING
+# ------------------------------------------------------------
+
+matching_int_data <- interaction_data %>%
+  drop_na(
+    interlocutor_matching,
+    overall_exposure_z,
+    child_age_years_z,
+    speaker_rate_z,
+    book_resources_z,
+    book_reading_z,
+    number_sources_z,
+    language_type,
+    internal_id
+  )
+
+# Main-effects model: both layers
+
+matching_main <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z +
+    child_age_years_z +
+    speaker_rate_z +
+    book_resources_z +
+    book_reading_z +
+    number_sources_z +
+    language_type +
+    (1 | internal_id),
+  data = matching_int_data,
+  REML = FALSE
+)
+
+# Full interaction model
+
+matching_interaction <- lmer(
+  interlocutor_matching ~
+    overall_exposure_z * language_type +
+    speaker_rate_z * language_type +
+    book_resources_z * language_type +
+    book_reading_z * language_type +
+    number_sources_z * language_type +
+    child_age_years_z +
+    (1 | internal_id),
+  data = matching_int_data,
+  REML = FALSE
+)
+
+# Compare models
+anova(matching_main, matching_interaction)
+
+# Inspect coefficients
+summary(matching_interaction)
+
+# ------------------------------------------------------------
+# 4. Check observations and model diagnostics
+# ------------------------------------------------------------
+
+sapply(
+  list(
+    active_main = active_main,
+    active_interaction = active_interaction,
+    matching_main = matching_main,
+    matching_interaction = matching_interaction
+  ),
+  nobs
+)
+
+# Check singular fits
+sapply(
+  list(
+    active_main = active_main,
+    active_interaction = active_interaction,
+    matching_main = matching_main,
+    matching_interaction = matching_interaction
+  ),
+  lme4::isSingular
+)
+
+
+
+
+interaction_results <- bind_rows(
+  broom.mixed::tidy(
+    active_interaction,
+    effects = "fixed"
+  ) %>%
+    mutate(outcome = "Active language use"),
+
+  broom.mixed::tidy(
+    matching_interaction,
+    effects = "fixed"
+  ) %>%
+    mutate(outcome = "Interlocutor matching")
+) %>%
+  filter(grepl(":", term)) %>%
+  select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) %>%
+  mutate(
+    across(
+      c(estimate, std.error, statistic, p.value),
+      ~ round(.x, 3)
+    )
+  )
+
+interaction_results
+
+
+
+#======================
+#PLOT MODEL BASED INTERACTIONS
+#=====================
+
+
+# ============================================================
+# MODEL-BASED INTERACTION PLOTS
+# ============================================================
+
+plot_interaction <- function(model, data, predictor, outcome,
+                             x_label, y_label) {
+
+  # Predictors included in the full interaction model
+  model_predictors <- c(
+    "overall_exposure_z",
+    "speaker_rate_z",
+    "book_resources_z",
+    "book_reading_z",
+    "number_sources_z",
+    "child_age_years_z"
+  )
+
+  # Create prediction grids within the observed
+  # range of each language group
+  prediction_grid <- purrr::map_dfr(
+    levels(data$language_type),
+    function(group) {
+
+      group_x <- data[[predictor]][
+        data$language_type == group
+      ]
+
+      group_x <- group_x[is.finite(group_x)]
+
+      if (length(group_x) == 0) {
+        return(tibble())
+      }
+
+      grid <- tibble(
+        language_type = factor(
+          rep(group, 100),
+          levels = levels(data$language_type)
+        )
+      )
+
+      # Hold all other predictors at zero
+      for (v in model_predictors) {
+        grid[[v]] <- 0
+      }
+
+      # Vary only the predictor being plotted
+      grid[[predictor]] <- seq(
+        min(group_x),
+        max(group_x),
+        length.out = 100
+      )
+
+      grid
+    }
+  )
+
+  # Fixed-effects design matrix
+  fixed_formula <- stats::delete.response(
+    terms(lme4::nobars(formula(model)))
+  )
+
+  X <- model.matrix(
+    fixed_formula,
+    data = prediction_grid
+  )
+
+  beta <- lme4::fixef(model)
+  V <- as.matrix(vcov(model))
+
+  # Ensure matrix columns match coefficients
+  X <- X[, names(beta), drop = FALSE]
+  V <- V[names(beta), names(beta), drop = FALSE]
+
+  # Predicted values
+  prediction_grid$predicted <- as.numeric(
+    X %*% beta
+  )
+
+  # Approximate standard errors of fixed predictions
+  prediction_grid$se <- sqrt(
+    rowSums((X %*% V) * X)
+  )
+
+  # Approximate 95% confidence intervals
+  prediction_grid <- prediction_grid %>%
+    mutate(
+      lower = predicted - 1.96 * se,
+      upper = predicted + 1.96 * se
+    )
+
+  # Plot observed data and adjusted predictions
+  ggplot() +
+
+    geom_point(
+      data = data,
+      aes(
+        x = .data[[predictor]],
+        y = .data[[outcome]],
+        color = language_type
+      ),
+      alpha = 0.25,
+      size = 1.8,
+      position = position_jitter(
+        width = 0.05,
+        height = 0
+      )
+    ) +
+
+    geom_ribbon(
+      data = prediction_grid,
+      aes(
+        x = .data[[predictor]],
+        ymin = lower,
+        ymax = upper,
+        fill = language_type,
+        group = language_type
+      ),
+      alpha = 0.15
+    ) +
+
+    geom_line(
+      data = prediction_grid,
+      aes(
+        x = .data[[predictor]],
+        y = predicted,
+        color = language_type
+      ),
+      linewidth = 1.2
+    ) +
+
+    scale_color_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+
+    scale_fill_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+
+    labs(
+      x = x_label,
+      y = y_label,
+      color = "Language type",
+      fill = "Language type"
+    ) +
+
+    theme_classic(base_size = 13) +
+
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold")
+    )
+}
+
+
+
+
+# ============================================================
+# Create interaction plots from fitted LMEMs
+# ============================================================
+
+
+# ============================================================
+# EXPLORATORY INTERACTIONS: MODEL-BASED VISUALIZATIONS
+# Full both-layers LMEM models
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Function to create model-based interaction plots
+# ------------------------------------------------------------
+
+plot_interaction <- function(model, data, predictor, outcome,
+                             x_label, y_label) {
+
+  # All continuous predictors in the full models
+  model_predictors <- c(
+    "overall_exposure_z",
+    "speaker_rate_z",
+    "book_resources_z",
+    "book_reading_z",
+    "number_sources_z",
+    "child_age_years_z"
+  )
+
+  # Create prediction grids separately for each language type
+  # to avoid extrapolating outside each group's observed range
+  prediction_grid <- purrr::map_dfr(
+    levels(data$language_type),
+    function(group) {
+
+      group_x <- data[[predictor]][
+        data$language_type == group
+      ]
+
+      group_x <- group_x[is.finite(group_x)]
+
+      if (length(group_x) == 0) {
+        return(tibble())
+      }
+
+      grid <- tibble(
+        language_type = factor(
+          rep(group, 100),
+          levels = levels(data$language_type)
+        )
+      )
+
+      # Hold all other continuous predictors at zero
+      for (v in model_predictors) {
+        grid[[v]] <- 0
+      }
+
+      # Vary only the predictor of interest
+      grid[[predictor]] <- seq(
+        min(group_x),
+        max(group_x),
+        length.out = 100
+      )
+
+      grid
+    }
+  )
+
+  # Construct the fixed-effects design matrix
+  fixed_formula <- stats::delete.response(
+    terms(lme4::nobars(formula(model)))
+  )
+
+  X <- model.matrix(
+    fixed_formula,
+    data = prediction_grid
+  )
+
+  beta <- lme4::fixef(model)
+  V <- as.matrix(vcov(model))
+
+  # Match the design matrix and covariance matrix
+  # to the fixed-effect coefficients
+  X <- X[, names(beta), drop = FALSE]
+  V <- V[names(beta), names(beta), drop = FALSE]
+
+  # Calculate population-level predictions
+  prediction_grid$predicted <- as.numeric(
+    X %*% beta
+  )
+
+  # Standard errors for fixed-effect predictions
+  prediction_grid$se <- sqrt(
+    rowSums((X %*% V) * X)
+  )
+
+  # Approximate 95% confidence intervals
+  prediction_grid <- prediction_grid %>%
+    mutate(
+      lower = predicted - 1.96 * se,
+      upper = predicted + 1.96 * se
+    )
+
+  # Plot observed values and model predictions
+  ggplot() +
+
+    geom_point(
+      data = data,
+      aes(
+        x = .data[[predictor]],
+        y = .data[[outcome]],
+        color = language_type
+      ),
+      alpha = 0.25,
+      size = 1.8,
+      position = position_jitter(
+        width = 0.05,
+        height = 0
+      )
+    ) +
+
+    geom_ribbon(
+      data = prediction_grid,
+      aes(
+        x = .data[[predictor]],
+        ymin = lower,
+        ymax = upper,
+        fill = language_type,
+        group = language_type
+      ),
+      alpha = 0.15
+    ) +
+
+    geom_line(
+      data = prediction_grid,
+      aes(
+        x = .data[[predictor]],
+        y = predicted,
+        color = language_type
+      ),
+      linewidth = 1.2
+    ) +
+
+    scale_color_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+
+    scale_fill_manual(
+      values = c(
+        "Community" = "#8DAEE1",
+        "Heritage" = "#B0DA87"
+      )
+    ) +
+
+    labs(
+      x = x_label,
+      y = y_label,
+      color = "Language type",
+      fill = "Language type"
+    ) +
+
+    theme_classic(base_size = 13) +
+
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(face = "bold")
+    )
+}
+
+# ------------------------------------------------------------
+# 2. Define predictors to visualize
+# ------------------------------------------------------------
+
+predictors <- tibble(
+  predictor = c(
+    "overall_exposure_z",
+    "speaker_rate_z",
+    "book_resources_z",
+    "book_reading_z",
+    "number_sources_z"
+  ),
+  label = c(
+    "Overall language exposure (z)",
+    "Speaker rate (z)",
+    "Access to books (z)",
+    "Book reading (z)",
+    "Number of language sources (z)"
+  ),
+  title = c(
+    "Exposure",
+    "Speaker rate",
+    "Book resources",
+    "Reading",
+    "Sources"
+  )
+)
+
+# ------------------------------------------------------------
+# 3. Generate plots using fitted LMEMs
+# ------------------------------------------------------------
+
+active_plots <- purrr::map2(
+  predictors$predictor,
+  predictors$label,
+  ~ plot_interaction(
+    model = active_interaction,
+    data = active_int_data,
+    predictor = .x,
+    outcome = "active_use",
+    x_label = .y,
+    y_label = "Active language use"
+  )
+)
+
+matching_plots <- purrr::map2(
+  predictors$predictor,
+  predictors$label,
+  ~ plot_interaction(
+    model = matching_interaction,
+    data = matching_int_data,
+    predictor = .x,
+    outcome = "interlocutor_matching",
+    x_label = .y,
+    y_label = "Interlocutor matching (%)"
+  )
+)
+
+# ------------------------------------------------------------
+# 4. Apply titles and formatting
+# ------------------------------------------------------------
+
+larger_theme <- theme(
+  plot.title = element_text(
+    size = 15,
+    face = "bold",
+    margin = margin(b = 8)
+  ),
+  axis.title = element_text(size = 14),
+  axis.text = element_text(size = 12),
+  legend.title = element_text(size = 14),
+  legend.text = element_text(size = 13),
+  plot.margin = margin(8, 8, 8, 8)
+)
+
+all_plots <- list()
+
+for (i in seq_len(nrow(predictors))) {
+
+  active_plots[[i]] <- active_plots[[i]] +
+    labs(
+      title = paste0(
+        LETTERS[2 * i - 1], ". ",
+        predictors$title[i],
+        " × Language type"
+      )
+    ) +
+    larger_theme
+
+  matching_plots[[i]] <- matching_plots[[i]] +
+    labs(
+      title = paste0(
+        LETTERS[2 * i], ". ",
+        predictors$title[i],
+        " × Language type"
+      )
+    ) +
+    larger_theme
+
+  all_plots <- append(
+    all_plots,
+    list(active_plots[[i]], matching_plots[[i]])
+  )
+}
+
+# ------------------------------------------------------------
+# 5. Combine plots: 2 columns x 5 rows
+# ------------------------------------------------------------
+
+interaction_figure <- wrap_plots(
+  all_plots,
+  ncol = 2,
+  guides = "collect"
+) &
+  theme(legend.position = "bottom")
+
+interaction_figure
+
+# ------------------------------------------------------------
+# 6. Save high-resolution figure
+# ------------------------------------------------------------
+
+ggsave(
+  "exploratory_language_interactions_adjusted.png",
+  interaction_figure,
+  width = 10,
+  height = 20,
+  dpi = 300,
+  bg = "white"
+)
+
+
+
+```
+
+```{r linear exploratory language status models}
+
+
+
+# ============================================================
+# 1. Standardize predictors
+# ============================================================
+
+minority_model_data <- minority_model_data %>%
+  mutate(
+    across(
+      c(
+        overall_exposure,
+        child_age_years,
+        speaker_rate,
+        book_resources,
+        book_reading,
+        number_sources
+      ),
+      ~ as.numeric(scale(.x)),
+      .names = "{.col}_z"
+    )
+  )
+
+# ============================================================
+# 2. Create common complete-case dataset
+# ============================================================
+
+minority_model_complete <- minority_model_data %>%
+  tidyr::drop_na(
+    active_use,
+    interlocutor_matching,
+    overall_exposure_z,
+    child_age_years_z,
+    speaker_rate_z,
+    book_resources_z,
+    book_reading_z,
+    number_sources_z
+  )
+
+# Check how many observations remain
+nrow(minority_model_complete)
+
+# ============================================================
+# 3. Degree of activeness models
+# ============================================================
+
+active_society_minority <- lm(
+  active_use ~ child_age_years_z + overall_exposure_z +
+    speaker_rate_z + book_resources_z,
+  data = minority_model_complete
+)
+
+active_family_minority <- lm(
+  active_use ~ child_age_years_z + overall_exposure_z +
+    book_reading_z + number_sources_z,
+  data = minority_model_complete
+)
+
+active_both_minority <- lm(
+  active_use ~ child_age_years_z + overall_exposure_z +
+    speaker_rate_z + book_resources_z +
+    book_reading_z + number_sources_z,
+  data = minority_model_complete
+)
+
+# ============================================================
+# 4. Interlocutor matching models
+# ============================================================
+
+matching_society_minority <- lm(
+  interlocutor_matching ~ child_age_years_z +
+    overall_exposure_z + speaker_rate_z + book_resources_z,
+  data = minority_model_complete
+)
+
+matching_family_minority <- lm(
+  interlocutor_matching ~ child_age_years_z +
+    overall_exposure_z + book_reading_z + number_sources_z,
+  data = minority_model_complete
+)
+
+matching_both_minority <- lm(
+  interlocutor_matching ~ child_age_years_z +
+    overall_exposure_z + speaker_rate_z + book_resources_z +
+    book_reading_z + number_sources_z,
+  data = minority_model_complete
+)
+
+# ============================================================
+# 5. Verify identical sample sizes
+# ============================================================
+
+sapply(
+  list(
+    active_society_minority,
+    active_family_minority,
+    active_both_minority,
+    matching_society_minority,
+    matching_family_minority,
+    matching_both_minority
+  ),
+  nobs
+)
+
+
+# ============================================================
+# 1. Define predictor labels and order
+# ============================================================
+
+predictor_labels <- c(
+  "(Intercept)" = "Intercept",
+  "overall_exposure_z" = "Overall language exposure",
+  "child_age_years_z" = "Child age",
+  "speaker_rate_z" = "Speaker rate",
+  "book_resources_z" = "Access to books",
+  "book_reading_z" = "Book reading",
+  "number_sources_z" = "Number of sources"
+)
+
+# ============================================================
+# 2. Define model comparison statistics
+# ============================================================
+
+model_statistics <- tibble::tribble(
+  ~raw,            ~clean,          ~fmt,
+  "nobs",          "N",                0,
+  "r.squared",     "R²",               3,
+  "adj.r.squared", "Adjusted R²",      3,
+  "AIC",           "AIC",              1,
+  "BIC",           "BIC",              1,
+  "RMSE",          "RMSE",             3
+)
+
+# ============================================================
+# 3. Degree of activeness models
+# ============================================================
+
+active_models_minority <- list(
+  "Societal" = active_society_minority,
+  "Family" = active_family_minority,
+  "Both layers" = active_both_minority
+)
+
+active_table_minority <- modelsummary(
+  active_models_minority,
+  coef_map = predictor_labels,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  fmt = 3,
+  stars = c(
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  gof_map = model_statistics,
+  output = "flextable"
+) %>%
+  set_caption(
+    "Table 1. Model comparison metrics for degree of activeness (heritage languages)"
+  ) %>%
+  theme_booktabs() %>%
+  autofit()
+
+# ============================================================
+# 4. Interlocutor matching models
+# ============================================================
+
+matching_models_minority <- list(
+  "Societal" = matching_society_minority,
+  "Family" = matching_family_minority,
+  "Both layers" = matching_both_minority
+)
+
+matching_table_minority <- modelsummary(
+  matching_models_minority,
+  coef_map = predictor_labels,
+  estimate = "{estimate}{stars}",
+  statistic = "({std.error})",
+  fmt = 3,
+  stars = c(
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  gof_map = model_statistics,
+  output = "flextable"
+) %>%
+  set_caption(
+    "Table 2. Model comparison metrics for interlocutor matching (heritage languages)"
+  ) %>%
+  theme_booktabs() %>%
+  autofit()
+
+# ============================================================
+# 5. View tables
+# ============================================================
+
+active_table_minority
+matching_table_minority
+
+# ============================================================
+# 6. Export both tables to Word
+# ============================================================
+
+save_as_docx(
+  "Degree of activeness" = active_table_minority,
+  "Interlocutor matching" = matching_table_minority,
+  path = "heritage_language_model_tables.docx"
+)
+
+
+
+
+
+
+
+
+
+```
+
+Language agnostic analyses
+```{r correlation analyses language agnostic}
+
+#pearson correlation matrix including age, multingual rate, active use (both), attitudes, concerns.
+#For the matrix at least run each concern and attitude separate.
+
+lang_agnostic_predictors <- clean_w_predictors %>%
+  select(internal_id, child_age_years, beleifs_ahead_in_life, beleifs_belonging, beliefs_cognitive_benefits, worry_master_languages, worry_cognitive_difficulties, worry_school_difficulties, multilingual_rate)
+
+
+lang_agnostic_outcomes<- clean_w_predictors %>%
+  select(internal_id, child_french_active_use_category, child_english_active_use_category, child_first_min_active_use_category, child_second_min_active_use_category, child_third_min_active_use_category, child_french_interlocutor_matching, child_english_interlocutor_matching, child_first_min_interlocutor_matching, child_second_min_interlocutor_matching, child_third_min_interlocutor_matching)
+
+
+#making a binary measure of degree of activeness where all the languages must be at or above a score of 2 to receive 1, otherwise they receive 0.
+
+# ============================================================
+# 1. Create binary outcomes
+# ============================================================
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
+  mutate(
+    degree_of_activeness_combined = as.integer(
+      if_all(
+        ends_with("_active_use_category"),
+        ~ is.na(.x) | .x >= 2
+      )
+    ),
+
+    language_matching_combined = as.integer(
+      if_all(
+        ends_with("_interlocutor_matching"),
+        ~ is.na(.x) | .x >= 50
+      )
+    )
+  )
+
+
+# ============================================================
+# 2. VALIDATION: Missing outcome data
+# ============================================================
+
+outcome_missingness <- lang_agnostic_outcomes %>%
+  mutate(
+    n_active_scores = rowSums(
+      !is.na(pick(ends_with("_active_use_category")))
+    ),
+    n_matching_scores = rowSums(
+      !is.na(pick(ends_with("_interlocutor_matching")))
+    )
+  )
+
+# Summarize missing outcomes
+outcome_missingness %>%
+  summarise(
+    n_children = n(),
+    no_active_scores = sum(n_active_scores == 0),
+    no_matching_scores = sum(n_matching_scores == 0)
+  )
+
+# Stop if any child has no available scores
+stopifnot(
+  all(outcome_missingness$n_active_scores > 0),
+  all(outcome_missingness$n_matching_scores > 0)
+)
+
+
+lang_agnostic_outcomes <- lang_agnostic_outcomes %>%
+  select(internal_id, language_matching_combined, degree_of_activeness_combined)
+
+#combine the outcomes with the predictors for the correlations
+ for_agnostic_correlation<- lang_agnostic_predictors %>%
+   left_join(lang_agnostic_outcomes, by="internal_id") %>%
+   select(-internal_id)
+   
+
+  for_agnostic_models <- lang_agnostic_predictors %>%
+   left_join(lang_agnostic_outcomes, by="internal_id") 
+
+
+for_agnostic_correlation <- for_agnostic_correlation %>%
+  mutate(across(everything(), as.numeric))
+
+
+
+language_agnostic_correlation <- cor(
+ for_agnostic_correlation,
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
+
+
+
+language_agnostic_correlation_TEST <- psych::corr.test(
+  for_agnostic_correlation,
+  method = "spearman",
+  use = "pairwise",
+  adjust = "none"
+)
+
+
+# Significance at p < .05
+agnostic_significant_correlations_TEST <- language_agnostic_correlation_TEST$p < 0.05
+
+agnostic_significant_correlations_TEST
+
+corrplot(
+  language_agnostic_correlation,
+  method = "circle",
+  type = "upper",
+  diag = TRUE,
+  tl.col = "black",
+  tl.srt = 45,
+)
+
+
+
+
+```
+
+```{r logistic models}
+
+#==============================
+#1. Preparing the data
+
+
+
+logistic_data <- for_agnostic_models %>%
+  mutate(
+    across(
+      c(
+        child_age_years,
+        multilingual_rate,
+        beleifs_ahead_in_life,
+        beleifs_belonging,
+        beliefs_cognitive_benefits,
+        worry_master_languages,
+        worry_cognitive_difficulties,
+        worry_school_difficulties
+      ),
+      ~ as.numeric(scale(.x)),
+      .names = "{.col}_z"
+    )
+  )
+
+# Verify both outcomes are binary
+table(logistic_data$degree_of_activeness_combined,
+      useNA = "ifany")
+
+table(logistic_data$language_matching_combined,
+      useNA = "ifany")
+
+#ensure all models are using the same observations (to make model fit metrics comparable)
+
+
+predictors <- c(
+  "child_age_years_z",
+  "multilingual_rate_z",
+  "beleifs_ahead_in_life_z",
+  "beleifs_belonging_z",
+  "beliefs_cognitive_benefits_z",
+  "worry_master_languages_z",
+  "worry_cognitive_difficulties_z",
+  "worry_school_difficulties_z"
+)
+
+outcomes <- c(
+  "degree_of_activeness_combined",
+  "language_matching_combined"
+)
+
+# Complete cases for all variables in the models
+logistic_complete <- logistic_data %>%
+  drop_na(all_of(c(predictors, outcomes)))
+
+nrow(logistic_complete)
+
+#===========================================
+
+#Fit logistic models for degree of activeness
+
+
+# Societal model
+active_societal_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    multilingual_rate_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Family model
+active_family_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Both layers
+active_both_log <- glm(
+  degree_of_activeness_combined ~
+    child_age_years_z +
+    multilingual_rate_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+#==========================================
+#fit logistic models for language matching
+
+
+
+# Societal model
+matching_societal_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    multilingual_rate_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Family model
+matching_family_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+# Both layers
+matching_both_log <- glm(
+  language_matching_combined ~
+    child_age_years_z +
+    multilingual_rate_z +
+    beleifs_ahead_in_life_z +
+    beleifs_belonging_z +
+    beliefs_cognitive_benefits_z +
+    worry_master_languages_z +
+    worry_cognitive_difficulties_z +
+    worry_school_difficulties_z,
+  data = logistic_complete,
+  family = binomial(link = "logit")
+)
+
+
+#=======================================================
+#Create publication ready tables
+
+
+coef_names_log <- c(
+  "(Intercept)" = "Intercept",
+  "child_age_years_z" = "Child age",
+  "multilingual_rate_z" = "Multilingualism rate",
+  "beleifs_ahead_in_life_z" = "Beliefs: Future opportunities",
+  "beleifs_belonging_z" = "Beliefs: Belonging",
+  "beliefs_cognitive_benefits_z" = "Beliefs: Cognitive benefits",
+  "worry_master_languages_z" = "Concern: Language mastery",
+  "worry_cognitive_difficulties_z" = "Concern: Cognitive difficulties",
+  "worry_school_difficulties_z" = "Concern: School difficulties"
+)
+
+# McFadden's pseudo-R²
+mcfadden_r2 <- function(model) {
+  1 - as.numeric(
+    logLik(model) / logLik(update(model, . ~ 1))
+  )
+}
+
+# Define additional model statistics
+glance_custom.glm <- function(x, ...) {
+  data.frame(
+    mcfadden = mcfadden_r2(x)
+  )
+}
+
+# Goodness-of-fit statistics
+gof_log <- data.frame(
+  raw = c(
+    "nobs",
+    "mcfadden",
+    "aic",
+    "bic"
+  ),
+  clean = c(
+    "Observations",
+    "McFadden's pseudo-R²",
+    "AIC",
+    "BIC"
+  ),
+  fmt = c(0, 3, 1, 1)
+)
+
+
+
+#=== 
+#Degree of activeness table
+
+models_active_log <- list(
+  "Societal" = active_societal_log,
+  "Family" = active_family_log,
+  "Both layers" = active_both_log
+)
+
+table_active_log <- modelsummary(
+  models_active_log,
+  coef_map = coef_names_log,
+exponentiate = FALSE,
+estimate = "{estimate}{stars}",
+statistic = "({std.error})",
+  conf_level = 0.95,
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_log,
+  output = "flextable"
+)
+
+table_active_log <- table_active_log |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_active_log
+
+#=== 
+#Language matching table
+
+models_matching_log <- list(
+  "Societal" = matching_societal_log,
+  "Family" = matching_family_log,
+  "Both layers" = matching_both_log
+)
+
+table_matching_log <- modelsummary(
+  models_matching_log,
+  coef_map = coef_names_log,
+exponentiate = FALSE,
+estimate = "{estimate}{stars}",
+statistic = "({std.error})",
+  conf_level = 0.95,
+  stars = c(
+    "+" = 0.10,
+    "*" = 0.05,
+    "**" = 0.01,
+    "***" = 0.001
+  ),
+  fmt = 3,
+  gof_map = gof_log,
+  output = "flextable"
+)
+
+table_matching_log <- table_matching_log |>
+  theme_booktabs() |>
+  autofit() |>
+  fontsize(size = 10, part = "all") |>
+  align(align = "center", part = "all") |>
+  align(j = 1, align = "left", part = "all")
+
+table_matching_log
+
+#=========
+#save tables
+
+save_as_docx(
+  "Table 1. Logistic regression models predicting degree of activeness" =
+    table_active_log,
+
+  "Table 2. Logistic regression models predicting language matching" =
+    table_matching_log,
+
+  path = "logistic_regression_results.docx"
+)
+
+
+
+# Function to extract likelihood-ratio comparisons
+extract_lr <- function(model_small, model_large,
+                       outcome, comparison) {
+
+  result <- anova(
+    model_small,
+    model_large,
+    test = "Chisq"
+  )
+
+  tibble(
+    Outcome = outcome,
+    Comparison = comparison,
+    Chi_square = result$Deviance[2],
+    df = result$Df[2],
+    p = result$`Pr(>Chi)`[2]
+  )
+}
+
+anova_log_table <- bind_rows(
+  extract_lr(
+    active_societal_log,
+    active_both_log,
+    "Degree of activeness",
+    "Societal vs. both"
+  ),
+  extract_lr(
+    active_family_log,
+    active_both_log,
+    "Degree of activeness",
+    "Family vs. both"
+  ),
+  extract_lr(
+    matching_societal_log,
+    matching_both_log,
+    "Language matching",
+    "Societal vs. both"
+  ),
+  extract_lr(
+    matching_family_log,
+    matching_both_log,
+    "Language matching",
+    "Family vs. both"
+  )
+) %>%
+  mutate(
+    Chi_square = round(Chi_square, 2),
+    p = ifelse(
+      p < .001,
+      "< .001",
+      sprintf("%.3f", p)
+    )
+  )
+
+anova_log_flex <- flextable(anova_log_table) |>
+  set_header_labels(
+    Chi_square = "χ²",
+    df = "df",
+    p = "p"
+  ) |>
+  theme_booktabs() |>
+  autofit()
+
+anova_log_flex
+
+
+
+```
+
+
+```{r fixed exploratory}
+
+# ============================================================
+# EXPLORATORY ANALYSES:
+# COMMUNITY VS HERITAGE LANGUAGES BELOW THRESHOLD
+#
+# Outcomes:
+# 1. Active language use
+# 2. Interlocutor matching
+#
+# Groups:
+# 1. Community-Heritage bilinguals: Exact paired McNemar
+# 2. Trilinguals+: Binomial GLMM
+#
+# Includes figure, statistical tests, and audit checks
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+library(lme4)
+library(broom.mixed)
+
+
+# ============================================================
+# 1. DEFINE THRESHOLDS
+# ============================================================
+
+ACTIVE_THRESHOLD <- 2
+MATCHING_THRESHOLD <- 50
+
+
+# ============================================================
+# 2. CLASSIFY CHILDREN INTO LANGUAGE GROUPS
+# ============================================================
+# Use the cleaned language-level dataset.
+# This avoids counting "Non" or empty language slots.
+
+language_groups <- model_data_long %>%
+  distinct(internal_id, language, language_type) %>%
+  group_by(internal_id) %>%
+  summarise(
+    n_languages = n(),
+    n_community = sum(language_type == "Community"),
+    n_heritage = sum(language_type == "Heritage"),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    language_group = case_when(
+      n_languages >= 3 ~ "Trilinguals+",
+
+      n_languages == 2 & n_community == 2 ~
+        "Community bilinguals",
+
+      n_languages == 2 &
+        n_community == 1 &
+        n_heritage == 1 ~
+        "Community–Heritage bilinguals",
+
+      TRUE ~ NA_character_
+    ),
+
+    language_group = factor(
+      language_group,
+      levels = c(
+        "Community bilinguals",
+        "Community–Heritage bilinguals",
+        "Trilinguals+"
+      )
+    )
+  )
+
+# Check group sizes
+print(language_groups %>% count(language_group))
+
+# Verify no missing classifications or duplicate IDs
+stopifnot(
+  !anyNA(language_groups$language_group),
+  !anyDuplicated(language_groups$internal_id),
+  nrow(language_groups) ==
+    n_distinct(model_data_long$internal_id)
+)
+
+# Verify previously misclassified child
+stopifnot(
+  as.character(
+    language_groups$language_group[
+      language_groups$internal_id == 39976965
+    ]
+  ) == "Community–Heritage bilinguals"
+)
+
+
+# ============================================================
+# 3. PREPARE LANGUAGE-LEVEL THRESHOLD DATA
+# ============================================================
+
+threshold_plot_data <- model_data_long %>%
+  left_join(
+    language_groups %>%
+      select(internal_id, language_group),
+    by = "internal_id",
+    relationship = "many-to-one"
+  ) %>%
+  mutate(
+    language_type = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    ),
+
+    below_activeness = case_when(
+      is.na(active_use) ~ NA_integer_,
+      active_use < ACTIVE_THRESHOLD ~ 1L,
+      TRUE ~ 0L
+    ),
+
+    below_matching = case_when(
+      is.na(interlocutor_matching) ~ NA_integer_,
+      interlocutor_matching < MATCHING_THRESHOLD ~ 1L,
+      TRUE ~ 0L
+    )
+  ) %>%
+  filter(
+    language_group %in% c(
+      "Community–Heritage bilinguals",
+      "Trilinguals+"
+    )
+  ) %>%
+  droplevels()
+
+
+# ============================================================
+# 4. SUMMARIZE PERCENTAGES BELOW THRESHOLD
+# ============================================================
+
+activeness_summary <- threshold_plot_data %>%
+  filter(!is.na(below_activeness)) %>%
+  group_by(language_group, language_type) %>%
+  summarise(
+    n_languages = n(),
+    n_below = sum(below_activeness),
+    percent_below = 100 * mean(below_activeness),
+    .groups = "drop"
+  ) %>%
+  mutate(outcome_metric = "Active language use")
+
+matching_summary <- threshold_plot_data %>%
+  filter(!is.na(below_matching)) %>%
+  group_by(language_group, language_type) %>%
+  summarise(
+    n_languages = n(),
+    n_below = sum(below_matching),
+    percent_below = 100 * mean(below_matching),
+    .groups = "drop"
+  ) %>%
+  mutate(outcome_metric = "Interlocutor matching")
+
+threshold_summary <- bind_rows(
+  activeness_summary,
+  matching_summary
+) %>%
+  mutate(
+    outcome_metric = factor(
+      outcome_metric,
+      levels = c(
+        "Active language use",
+        "Interlocutor matching"
+      )
+    ),
+
+    language_group = factor(
+      language_group,
+      levels = c(
+        "Community–Heritage bilinguals",
+        "Trilinguals+"
+      )
+    )
+  )
+
+print(threshold_summary)
+
+
+# ============================================================
+# 5. FIGURE: LANGUAGES BELOW THRESHOLD
+# ============================================================
+
+threshold_figure <- ggplot(
+  threshold_summary,
+  aes(
+    x = language_type,
+    y = percent_below,
+    fill = language_type
+  )
+) +
+  geom_col(width = 0.6) +
+  geom_text(
+    aes(label = paste0(round(percent_below, 1), "%")),
+    vjust = -0.4,
+    size = 4.3
+  ) +
+  facet_grid(
+    outcome_metric ~ language_group
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Community" = "#8DAEE1",
+      "Heritage" = "#B0DA87"
+    ),
+    drop = FALSE
+  ) +
+  scale_y_continuous(
+    limits = c(0, 110),
+    breaks = seq(0, 100, 20),
+    labels = function(x) paste0(x, "%")
+  ) +
+  labs(
+    x = NULL,
+    y = "Languages below threshold (%)",
+    fill = "Language type",
+    title = "Language status and below-threshold outcomes"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(
+      size = 13,
+      face = "bold"
+    ),
+    axis.text.x = element_text(size = 12)
+  )
+
+print(threshold_figure)
+
+ggsave(
+  "Figure_below_threshold_by_status_and_outcome.pdf",
+  threshold_figure,
+  width = 8.5,
+  height = 7,
+  bg = "white"
+)
+
+
+# ============================================================
+# 6. PREPARE LONG DATA FOR STATISTICAL TESTS
+# ============================================================
+
+threshold_test_data <- threshold_plot_data %>%
+  select(
+    internal_id,
+    language,
+    language_group,
+    language_type,
+    below_activeness,
+    below_matching
+  ) %>%
+  pivot_longer(
+    cols = c(below_activeness, below_matching),
+    names_to = "outcome_metric",
+    values_to = "below_threshold"
+  ) %>%
+  mutate(
+    outcome_metric = dplyr::recode(
+      outcome_metric,
+      below_activeness = "Active language use",
+      below_matching = "Interlocutor matching"
+    ),
+    below_threshold = as.integer(below_threshold)
+  ) %>%
+  filter(!is.na(below_threshold)) %>%
+  droplevels()
+
+# Check that no child-language-outcome is duplicated
+duplicates <- threshold_test_data %>%
+  count(internal_id, language, outcome_metric) %>%
+  filter(n > 1)
+
+stopifnot(nrow(duplicates) == 0)
+
+# Verify threshold coding
+stopifnot(
+  all(
+    threshold_plot_data$below_activeness[
+      !is.na(threshold_plot_data$active_use)
+    ] ==
+      as.integer(
+        threshold_plot_data$active_use[
+          !is.na(threshold_plot_data$active_use)
+        ] < ACTIVE_THRESHOLD
+      )
+  ),
+
+  all(
+    threshold_plot_data$below_matching[
+      !is.na(threshold_plot_data$interlocutor_matching)
+    ] ==
+      as.integer(
+        threshold_plot_data$interlocutor_matching[
+          !is.na(threshold_plot_data$interlocutor_matching)
+        ] < MATCHING_THRESHOLD
+      )
+  )
+)
+
+
+# ============================================================
+# 7. VERIFY FIGURE AND TEST DATA AGREE
+# ============================================================
+
+summary_from_tests <- threshold_test_data %>%
+  group_by(
+    outcome_metric,
+    language_group,
+    language_type
+  ) %>%
+  summarise(
+    n_languages_check = n(),
+    n_below_check = sum(below_threshold),
+    .groups = "drop"
+  )
+
+figure_check <- threshold_summary %>%
+  left_join(
+    summary_from_tests,
+    by = c(
+      "outcome_metric",
+      "language_group",
+      "language_type"
+    )
+  ) %>%
+  filter(
+    is.na(n_languages_check) |
+      n_languages != n_languages_check |
+      n_below != n_below_check
+  )
+
+stopifnot(nrow(figure_check) == 0)
+
+cat("\nFigure and statistical test data agree.\n")
+
+
+# ============================================================
+# 8. COMMUNITY-HERITAGE BILINGUALS
+# EXACT PAIRED MCNEMAR TESTS
+# ============================================================
+
+bilingual_data <- threshold_test_data %>%
+  filter(
+    language_group == "Community–Heritage bilinguals"
+  )
+
+# One observation per child, type, and outcome
+bilingual_duplicates <- bilingual_data %>%
+  count(
+    internal_id,
+    outcome_metric,
+    language_type
+  ) %>%
+  filter(n > 1)
+
+stopifnot(nrow(bilingual_duplicates) == 0)
+
+# Create one row per child per outcome
+bilingual_paired <- bilingual_data %>%
+  select(
+    internal_id,
+    outcome_metric,
+    language_type,
+    below_threshold
+  ) %>%
+  pivot_wider(
+    names_from = language_type,
+    values_from = below_threshold
+  ) %>%
+  filter(
+    !is.na(Community),
+    !is.na(Heritage)
+  )
+
+# Check paired sample sizes
+print(
+  bilingual_paired %>%
+    count(outcome_metric, name = "N_paired_children")
+)
+
+
+# ------------------------------------------------------------
+# Exact paired comparison function
+# ------------------------------------------------------------
+
+run_paired_test <- function(data, outcome_name) {
+
+  dat <- data %>%
+    filter(outcome_metric == outcome_name)
+
+  paired_table <- table(
+    Community = factor(dat$Community, levels = c(0, 1)),
+    Heritage = factor(dat$Heritage, levels = c(0, 1))
+  )
+
+  cat("\n====================================\n")
+  cat("PAIRED TEST:", outcome_name, "\n")
+  cat("====================================\n")
+
+  print(paired_table)
+
+  # Heritage below, Community above
+  b <- sum(
+    dat$Community == 0 &
+      dat$Heritage == 1
+  )
+
+  # Community below, Heritage above
+  c <- sum(
+    dat$Community == 1 &
+      dat$Heritage == 0
+  )
+
+  if (b + c > 0) {
+    result <- binom.test(
+      x = b,
+      n = b + c,
+      p = 0.5
+    )
+    p_value <- result$p.value
+  } else {
+    p_value <- 1
+  }
+
+  tibble(
+    Outcome = outcome_name,
+    N_children = nrow(dat),
+    Heritage_below_Community_above = b,
+    Community_below_Heritage_above = c,
+    Discordant_pairs = b + c,
+    p_value = p_value
+  )
+}
+
+bilingual_results <- purrr::map_dfr(
+  c("Active language use", "Interlocutor matching"),
+  ~ run_paired_test(bilingual_paired, .x)
+)
+
+print(bilingual_results)
+
+
+# ============================================================
+# 9. TRILINGUALS+
+# BINOMIAL MIXED-EFFECTS MODELS
+# ============================================================
+
+trilingual_data <- threshold_test_data %>%
+  filter(language_group == "Trilinguals+") %>%
+  droplevels()
+
+# Descriptive checks
+trilingual_summary <- trilingual_data %>%
+  group_by(outcome_metric, language_type) %>%
+  summarise(
+    N_languages = n(),
+    N_children = n_distinct(internal_id),
+    N_below = sum(below_threshold),
+    Percent_below = 100 * mean(below_threshold),
+    .groups = "drop"
+  )
+
+print(trilingual_summary)
+
+
+# ------------------------------------------------------------
+# Function: GLMM by outcome
+# ------------------------------------------------------------
+
+run_trilingual_model <- function(data, outcome_name) {
+
+  dat <- data %>%
+    filter(outcome_metric == outcome_name) %>%
+    droplevels()
+
+  cat("\n====================================\n")
+  cat("TRILINGUAL MODEL:", outcome_name, "\n")
+  cat("====================================\n")
+
+  cat("Observations:", nrow(dat), "\n")
+  cat("Children:", n_distinct(dat$internal_id), "\n")
+
+  null_model <- glmer(
+    below_threshold ~ 1 + (1 | internal_id),
+    data = dat,
+    family = binomial,
+    control = glmerControl(optimizer = "bobyqa")
+  )
+
+  language_model <- glmer(
+    below_threshold ~ language_type + (1 | internal_id),
+    data = dat,
+    family = binomial,
+    control = glmerControl(optimizer = "bobyqa")
+  )
+
+  comparison <- anova(
+    null_model,
+    language_model,
+    test = "Chisq"
+  )
+
+  odds_ratios <- broom.mixed::tidy(
+    language_model,
+    effects = "fixed",
+    conf.int = TRUE,
+    conf.method = "Wald",
+    exponentiate = TRUE
+  )
+
+  singular <- lme4::isSingular(language_model)
+
+  convergence_messages <-
+    language_model@optinfo$conv$lme4$messages
+
+  cat("\nMODEL COMPARISON\n")
+  print(comparison)
+
+  cat("\nMODEL COEFFICIENTS\n")
+  print(summary(language_model))
+
+  cat("\nODDS RATIOS\n")
+  print(odds_ratios)
+
+  cat("\nMODEL DIAGNOSTICS\n")
+  cat("Singular:", singular, "\n")
+
+  if (length(convergence_messages) > 0) {
+    print(convergence_messages)
+  } else {
+    cat("No convergence warnings.\n")
+  }
+
+  print(VarCorr(language_model))
+
+  list(
+    null_model = null_model,
+    language_model = language_model,
+    comparison = comparison,
+    odds_ratios = odds_ratios,
+    singular = singular,
+    convergence_messages = convergence_messages
+  )
+}
+
+
+# ============================================================
+# 10. RUN TRILINGUAL MODELS
+# ============================================================
+
+trilingual_active <- run_trilingual_model(
+  trilingual_data,
+  "Active language use"
+)
+
+trilingual_matching <- run_trilingual_model(
+  trilingual_data,
+  "Interlocutor matching"
+)
+
+
+# ============================================================
+# 11. EXTRACT RESULTS FOR REPORTING
+# ============================================================
+
+trilingual_results <- bind_rows(
+  trilingual_active$odds_ratios %>%
+    mutate(Outcome = "Active language use"),
+
+  trilingual_matching$odds_ratios %>%
+    mutate(Outcome = "Interlocutor matching")
+) %>%
+  filter(term == "language_typeHeritage") %>%
+  select(
+    Outcome,
+    term,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value
+  )
+
+cat("\n====================================\n")
+cat("FINAL PAIRED COMPARISONS\n")
+cat("====================================\n")
+print(bilingual_results)
+
+cat("\n====================================\n")
+cat("FINAL TRILINGUAL ODDS RATIOS\n")
+cat("====================================\n")
+print(trilingual_results)
+
+
+# ============================================================
+# 12. FINAL AUDIT CHECKS
+# ============================================================
+
+# Confirm groups agree with the source classification
+classification_check <- threshold_plot_data %>%
+  distinct(internal_id, language_group) %>%
+  left_join(
+    language_groups %>%
+      select(
+        internal_id,
+        current_group = language_group
+      ),
+    by = "internal_id"
+  ) %>%
+  filter(
+    as.character(language_group) !=
+      as.character(current_group) |
+      is.na(current_group)
+  )
+
+stopifnot(nrow(classification_check) == 0)
+
+# Confirm number of children and observations
+final_sample_check <- threshold_test_data %>%
+  group_by(outcome_metric, language_group) %>%
+  summarise(
+    N_children = n_distinct(internal_id),
+    N_languages = n(),
+    .groups = "drop"
+  )
+
+print(final_sample_check)
+
+cat("\n====================================\n")
+cat("EXPLORATORY ANALYSIS AUDIT COMPLETED\n")
+cat("====================================\n")
+cat("No duplicate child-language-outcome rows.\n")
+cat("Language classifications are consistent.\n")
+cat("Figure and statistical test summaries agree.\n")
+cat("Check GLMM singularity and warnings above.\n")
+
+
+
+
+# ============================================================
+# SENSITIVITY: Singular trilingual active-use GLMM
+# Logistic regression with child-cluster-robust SEs
+# ============================================================
+
+library(dplyr)
+library(sandwich)
+library(lmtest)
+
+tri_active_data <- trilingual_data %>%
+  filter(outcome_metric == "Active language use") %>%
+  droplevels()
+
+# Fit ordinary logistic regression
+tri_active_glm <- glm(
+  below_threshold ~ language_type,
+  data = tri_active_data,
+  family = binomial
+)
+
+# Cluster-robust covariance matrix
+cluster_vcov <- sandwich::vcovCL(
+  tri_active_glm,
+  cluster = tri_active_data$internal_id,
+  type = "HC1"
+)
+
+# Cluster-robust coefficient tests
+lmtest::coeftest(
+  tri_active_glm,
+  vcov. = cluster_vcov,
+  df = n_distinct(tri_active_data$internal_id) - 1
+)
+
+# Odds ratio and cluster-robust 95% CI
+estimate <- coef(tri_active_glm)["language_typeHeritage"]
+
+robust_se <- sqrt(
+  diag(cluster_vcov)
+)["language_typeHeritage"]
+
+critical_value <- qt(
+  0.975,
+  df = n_distinct(tri_active_data$internal_id) - 1
+)
+
+data.frame(
+  predictor = "Heritage vs Community",
+  OR = exp(estimate),
+  CI_lower = exp(
+    estimate - critical_value * robust_se
+  ),
+  CI_upper = exp(
+    estimate + critical_value * robust_se
+  )
+)
+
+
+
+
+```
+
+```{r exploratory language status analyses}
+# #==========================
+# #Binary outcome distributions
+# 
+# 
+# #
+# # ============================================================
+# # STEP 1: Identify each child's language group
+# # ============================================================
+# 
+# language_groups <- clean_w_predictors %>%
+#   select(
+#     internal_id,
+#     child_english,
+#     child_french,
+#     child_first_minority,
+#     child_second_minority,
+#     child_third_minority
+#   ) %>%
+#   distinct(internal_id, .keep_all = TRUE) %>%
+#   pivot_longer(
+#     cols = -internal_id,
+#     names_to = "language_source",
+#     values_to = "language"
+#   ) %>%
+#   mutate(
+#     language = str_squish(as.character(language)),
+#     language = case_when(
+#       str_to_lower(language) %in%
+#         c("english", "anglais") ~ "English",
+# 
+#       str_to_lower(language) %in%
+#         c("french", "français", "francais") ~ "French",
+# 
+#       TRUE ~ language
+#     )
+#   ) %>%
+#   filter(
+#     !is.na(language),
+#     language != ""
+#   ) %>%
+#   distinct(internal_id, language) %>%
+#   group_by(internal_id) %>%
+#   summarise(
+#     n_languages = n(),
+#     has_french = any(language == "French"),
+#     has_english = any(language == "English"),
+#     n_heritage = sum(
+#       !language %in% c("French", "English")
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     language_group = case_when(
+#       n_languages >= 3 ~ "Trilinguals+",
+# 
+#       n_languages == 2 &
+#         has_french & has_english ~
+#         "Community bilinguals",
+# 
+#       n_languages == 2 &
+#         n_heritage == 1 ~
+#         "Community–Heritage bilinguals",
+# 
+#       TRUE ~ NA_character_
+#     ),
+# 
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community bilinguals",
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# # Check group sizes
+# language_groups %>%
+#   count(language_group)
+# 
+# # 
+# # # cOMMENTED OUT, WE DECIDED NOT TO USE THESE ANALYSES SINCE THEY ARE OUT OF THE SCOPE OF WHAT WE WANTED TO KNOW FOR LANGUAGE STATUS
+# # # ============================================================
+# # # STEP 2: Join language groups to binary outcome
+# # # ============================================================
+# # 
+# # binary_plot_data <- child_data %>%
+# #   select(
+# #     internal_id,
+# #     degree_of_activeness_combined
+# #   ) %>%
+# #   left_join(
+# #     language_groups %>%
+# #       select(internal_id, language_group),
+# #     by = "internal_id"
+# #   )
+# # 
+# # # Check for missing classifications
+# # binary_plot_data %>%
+# #   count(
+# #     language_group,
+# #     degree_of_activeness_combined
+# #   )
+# # 
+# # 
+# # # ============================================================
+# # # STEP 3: Calculate group composition for 0 and 1
+# # # ============================================================
+# # 
+# # binary_distribution <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(degree_of_activeness_combined),
+# #     !is.na(language_group)
+# #   ) %>%
+# #   count(
+# #     degree_of_activeness_combined,
+# #     language_group,
+# #     name = "n"
+# #   ) %>%
+# #   group_by(degree_of_activeness_combined) %>%
+# #   mutate(
+# #     percentage = 100 * n / sum(n)
+# #   ) %>%
+# #   ungroup()
+# # 
+# # binary_distribution
+# # 
+# # 
+# # # ============================================================
+# # # STEP 4: 100% stacked bar chart
+# # # ============================================================
+# # 
+# # binary_figure <- ggplot(
+# #   binary_distribution,
+# #   aes(
+# #     x = factor(
+# #       degree_of_activeness_combined,
+# #       levels = c(0, 1),
+# #       labels = c("Score 0", "Score 1")
+# #     ),
+# #     y = percentage,
+# #     fill = language_group
+# #   )
+# # ) +
+# #   geom_col(
+# #     width = 0.65,
+# #     color = "white",
+# #     linewidth = 0.5
+# #   ) +
+# #   geom_text(
+# #     aes(
+# #       label = if_else(
+# #         percentage >= 5,
+# #         paste0(round(percentage, 1), "%"),
+# #         ""
+# #       )
+# #     ),
+# #     position = position_stack(vjust = 0.5),
+# #     size = 4.5
+# #   ) +
+# #   coord_flip() +
+# #   scale_fill_manual(
+# #     values = c(
+# #       "Community bilinguals" = "#8DAEE1",
+# #       "Community–Heritage bilinguals" = "#B0DA87",
+# #       "Trilinguals+" = "#FAE0BD"
+# #     )
+# #   ) +
+# #   scale_y_continuous(
+# #     limits = c(0, 100),
+# #     breaks = seq(0, 100, 20),
+# #     labels = function(x) paste0(x, "%"),
+# #     expand = c(0, 0)
+# #   ) +
+# #   labs(
+# #     x = NULL,
+# #     y = "Percentage of children",
+# #     fill = "Language group",
+# #     title = "Language profiles by combined activeness score"
+# #   ) +
+# #   theme_classic(base_size = 15) +
+# #   theme(
+# #     plot.title = element_text(
+# #       face = "bold",
+# #       size = 16
+# #     ),
+# #     legend.position = "bottom",
+# #     legend.title = element_blank(),
+# #     legend.text = element_text(size = 12),
+# #     axis.text = element_text(size = 13)
+# #   )
+# # 
+# # binary_figure
+# # 
+# # ggsave(
+# #   "Figure_binary_activeness_language_groups.pdf",
+# #   binary_figure,
+# #   width = 7.2,
+# #   height = 4.5,
+# #   bg = "white"
+# # )
+# # 
+# # 
+# # binary_by_group <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(degree_of_activeness_combined),
+# #     !is.na(language_group)
+# #   ) %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     N = n(),
+# #     n_score_1 = sum(degree_of_activeness_combined == 1),
+# #     percent_score_1 = 100 * mean(
+# #       degree_of_activeness_combined == 1
+# #     ),
+# #     .groups = "drop"
+# #   )
+# # 
+# # binary_by_group
+# # 
+# # 
+# # #Let's do a chi-square test of independence to see if thecategories of children who score 1 in the binary score are distributed the same way they are in our sample 
+# # 
+# # 
+# # 
+# # # Create contingency table
+# # activeness_table <- table(
+# #   binary_plot_data$language_group,
+# #   binary_plot_data$degree_of_activeness_combined
+# # )
+# # 
+# # activeness_table
+# # 
+# # # Pearson chi-square test
+# # chi_result <- chisq.test(
+# #   activeness_table,
+# #   correct = FALSE
+# # )
+# # 
+# # chi_result
+# # 
+# # # Check expected frequencies
+# # chi_result$expected
+# # 
+# # # Standardized Pearson residuals
+# # chi_result$stdres
+# # 
+# # # Cramer's V
+# # cramers_v <- sqrt(
+# #   unname(chi_result$statistic) /
+# #     (sum(activeness_table) *
+# #        min(dim(activeness_table) - 1))
+# # )
+# # 
+# # cramers_v
+# # 
+# # 
+# # 
+# # # Summarize binary outcome by language group
+# # pairwise_data <- binary_plot_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(degree_of_activeness_combined)
+# #   ) %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     n_score_1 = sum(degree_of_activeness_combined == 1),
+# #     N = n(),
+# #     .groups = "drop"
+# #   )
+# # 
+# # # Pairwise comparisons of proportions
+# # pairwise_result <- pairwise.prop.test(
+# #   x = pairwise_data$n_score_1,
+# #   n = pairwise_data$N,
+# #   p.adjust.method = "holm"
+# # )
+# # 
+# # pairwise_result
+# # 
+# # 
+# # #Let's then also make a sensitivity analyses that does not punish trilingual children making them harder to achieve the score of 1 because they have to surpass the threshold for more languages
+# # 
+# # # ============================================================
+# # # STEP 1: Calculate proportion of active languages per child
+# # # ============================================================
+# # 
+# # child_activeness <- model_data_long %>%
+# #   group_by(internal_id) %>%
+# #   summarise(
+# #     n_languages = n(),
+# #     n_valid = sum(!is.na(active_use)),
+# # 
+# #     n_active = sum(
+# #       active_use >= 2,
+# #       na.rm = TRUE
+# #     ),
+# # 
+# #     proportion_active = if_else(
+# #       n_valid > 0,
+# #       n_active / n_valid,
+# #       NA_real_
+# #     ),
+# # 
+# #     .groups = "drop"
+# #   )
+# # 
+# # # Join language group classifications
+# # sensitivity_data <- child_activeness %>%
+# #   left_join(
+# #     language_groups %>%
+# #       select(internal_id, language_group),
+# #     by = "internal_id"
+# #   )
+# # 
+# # # Check results
+# # sensitivity_data %>%
+# #   group_by(language_group) %>%
+# #   summarise(
+# #     N = n(),
+# #     Mean_proportion = mean(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     SD = sd(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     Median = median(
+# #       proportion_active,
+# #       na.rm = TRUE
+# #     ),
+# #     .groups = "drop"
+# #   )
+# # 
+# # 
+# # 
+# # # ============================================================
+# # # STEP 2: Visualize proportions across language groups
+# # # ============================================================
+# # 
+# # sensitivity_plot <- sensitivity_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(proportion_active)
+# #   ) %>%
+# #   ggplot(
+# #     aes(
+# #       x = language_group,
+# #       y = proportion_active,
+# #       fill = language_group
+# #     )
+# #   ) +
+# #   geom_jitter(
+# #     width = 0.15,
+# #     height = 0,
+# #     alpha = 0.35,
+# #     size = 2,
+# #     shape = 21
+# #   ) +
+# #   stat_summary(
+# #     fun = mean,
+# #     geom = "point",
+# #     shape = 23,
+# #     size = 4,
+# #     fill = "white",
+# #     color = "black"
+# #   ) +
+# #   scale_fill_manual(
+# #     values = c(
+# #       "Community bilinguals" = "#8DAEE1",
+# #       "Community–Heritage bilinguals" = "#B0DA87",
+# #       "Trilinguals+" = "#FAE0BD"
+# #     )
+# #   ) +
+# #   scale_y_continuous(
+# #     labels = scales::percent,
+# #     limits = c(0, 1)
+# #   ) +
+# #   labs(
+# #     x = NULL,
+# #     y = "Proportion of languages meeting activeness criterion",
+# #     title = "Sensitivity analysis: Proportion of active languages"
+# #   ) +
+# #   theme_classic(base_size = 14) +
+# #   theme(
+# #     legend.position = "none",
+# #     axis.text.x = element_text(
+# #       angle = 15,
+# #       hjust = 1
+# #     )
+# #   )
+# # 
+# # sensitivity_plot
+# # 
+# # 
+# # 
+# # # ============================================================
+# # # STEP 3: Kruskal-Wallis test
+# # # ============================================================
+# # 
+# # sensitivity_complete <- sensitivity_data %>%
+# #   filter(
+# #     !is.na(language_group),
+# #     !is.na(proportion_active)
+# #   )
+# # 
+# # kruskal_result <- kruskal.test(
+# #   proportion_active ~ language_group,
+# #   data = sensitivity_complete
+# # )
+# # 
+# # kruskal_result
+# # 
+# # 
+# # pairwise.wilcox.test(
+# #   x = sensitivity_complete$proportion_active,
+# #   g = sensitivity_complete$language_group,
+# #   p.adjust.method = "holm",
+# #   exact = FALSE
+# # )
+# # 
+# # 
+# # # ============================================================
+# # # STEP 4: Exploratory binomial regression
+# # # ============================================================
+# # 
+# # binomial_model <- glm(
+# #   cbind(
+# #     n_active,
+# #     n_valid - n_active
+# #   ) ~ language_group,
+# #   data = sensitivity_data %>%
+# #     filter(
+# #       !is.na(language_group),
+# #       n_valid > 0
+# #     ),
+# #   family = binomial
+# # )
+# # 
+# # summary(binomial_model)
+# # 
+# # # Omnibus test of language group
+# # drop1(
+# #   binomial_model,
+# #   test = "Chisq"
+# # )
+# # 
+# # 
+# # #Sensitivity analyses show no differences between groups, meaning that the stringent binary outcome causes the group differences, that is, if children did not have to speak more than two languages, the groups would be comparable, but because some do have to... those children tend to get less classified as 'active users' In other words. It is harder to be an active user when you have to speak three languages.
+# 
+# #Final exploratory analysis. Are some specific languages disproportionately falling below the activeness threshold we set up?
+# 
+# 
+# # ============================================================
+# # FIGURE: COMMUNITY VS HERITAGE LANGUAGE STATUS
+# # FOR LANGUAGES BELOW THRESHOLD
+# # Two rows: Activeness and Interlocutor matching
+# # Two columns: Community–Heritage bilinguals and Trilinguals+
+# # ============================================================
+# 
+# # ------------------------------------------------------------
+# # 1. Set thresholds
+# # ------------------------------------------------------------
+# 
+# ACTIVE_THRESHOLD <- 2
+# MATCHING_THRESHOLD <- 50   # <-- change this if your threshold differs
+# 
+# 
+# # ============================================================
+# # AUDIT: Reconstruct child language groups
+# # ============================================================
+# 
+# library(dplyr)
+# library(tidyr)
+# 
+# language_groups <- model_data_long %>%
+#   distinct(internal_id, language, language_type) %>%
+#   group_by(internal_id) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_community = sum(
+#       language_type == "Community"
+#     ),
+#     n_heritage = sum(
+#       language_type == "Heritage"
+#     ),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     language_group = case_when(
+#       n_languages >= 3 ~ "Trilinguals+",
+#       n_languages == 2 &
+#         n_community == 1 &
+#         n_heritage == 1 ~
+#           "Community–Heritage bilinguals",
+#       n_languages == 2 &
+#         n_community == 2 ~
+#           "Community bilinguals",
+#       TRUE ~ NA_character_
+#     ),
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community bilinguals",
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# # Inspect classifications and unexpected cases
+# language_groups %>%
+#   count(language_group, n_languages)
+# 
+# language_groups %>%
+#   filter(is.na(language_group))
+# 
+# # Integrity checks
+# stopifnot(
+#   nrow(language_groups) ==
+#     n_distinct(model_data_long$internal_id),
+#   !anyDuplicated(language_groups$internal_id)
+# )
+# 
+# 
+# # ------------------------------------------------------------
+# # 2. Prepare language-level data
+# # ------------------------------------------------------------
+# 
+# threshold_plot_data <- model_data_long %>%
+#   left_join(
+#     language_groups %>%
+#       select(internal_id, language_group),
+#     by = "internal_id"
+#   ) %>%
+#   mutate(
+#     language_type = factor(
+#       as.character(language_type),
+#       levels = c("Community", "Heritage")
+#     ),
+# 
+#     below_activeness = case_when(
+#       is.na(active_use) ~ NA_integer_,
+#       active_use < ACTIVE_THRESHOLD ~ 1L,
+#       active_use >= ACTIVE_THRESHOLD ~ 0L
+#     ),
+# 
+#     below_matching = case_when(
+#       is.na(interlocutor_matching) ~ NA_integer_,
+#       interlocutor_matching < MATCHING_THRESHOLD ~ 1L,
+#       interlocutor_matching >= MATCHING_THRESHOLD ~ 0L
+#     )
+#   ) %>%
+#   filter(
+#     language_group %in% c(
+#       "Community–Heritage bilinguals",
+#       "Trilinguals+"
+#     ),
+#     !is.na(language_group),
+#     !is.na(language_type)
+#   )
+# 
+# # ------------------------------------------------------------
+# # 3. Summarize percentages below threshold for each outcome
+# # ------------------------------------------------------------
+# 
+# activeness_summary <- threshold_plot_data %>%
+#   filter(!is.na(below_activeness)) %>%
+#   group_by(language_group, language_type) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_below = sum(below_activeness == 1),
+#     percent_below = 100 * mean(below_activeness == 1),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     outcome_metric = "Active language use"
+#   )
+# 
+# matching_summary <- threshold_plot_data %>%
+#   filter(!is.na(below_matching)) %>%
+#   group_by(language_group, language_type) %>%
+#   summarise(
+#     n_languages = n(),
+#     n_below = sum(below_matching == 1),
+#     percent_below = 100 * mean(below_matching == 1),
+#     .groups = "drop"
+#   ) %>%
+#   mutate(
+#     outcome_metric = "Interlocutor matching"
+#   )
+# 
+# threshold_summary <- bind_rows(
+#   activeness_summary,
+#   matching_summary
+# ) %>%
+#   mutate(
+#     outcome_metric = factor(
+#       outcome_metric,
+#       levels = c(
+#         "Active language use",
+#         "Interlocutor matching"
+#       )
+#     ),
+#     language_group = factor(
+#       language_group,
+#       levels = c(
+#         "Community–Heritage bilinguals",
+#         "Trilinguals+"
+#       )
+#     )
+#   )
+# 
+# threshold_summary
+# 
+# # ------------------------------------------------------------
+# # 4. Plot
+# # ------------------------------------------------------------
+# 
+# threshold_figure <- ggplot(
+#   threshold_summary,
+#   aes(
+#     x = language_type,
+#     y = percent_below,
+#     fill = language_type
+#   )
+# ) +
+#   geom_col(width = 0.6) +
+#   geom_text(
+#     aes(
+#       label = paste0(round(percent_below, 1), "%")
+#     ),
+#     vjust = -0.4,
+#     size = 4.3
+#   ) +
+#   facet_grid(
+#     outcome_metric ~ language_group
+#   ) +
+#   scale_fill_manual(
+#     values = c(
+#       "Community" = "#8DAEE1",
+#       "Heritage" = "#B0DA87"
+#     ),
+#     drop = FALSE
+#   ) +
+#   scale_y_continuous(
+#     limits = c(0, 110),
+#     breaks = seq(0, 100, 20),
+#     labels = function(x) paste0(x, "%")
+#   ) +
+#   labs(
+#     x = NULL,
+#     y = "Languages below threshold (%)",
+#     fill = "Language type",
+#     title = "Language status composition of languages below threshold"
+#   ) +
+#   theme_classic(base_size = 14) +
+#   theme(
+#     legend.position = "bottom",
+#     strip.text = element_text(
+#       size = 13,
+#       face = "bold"
+#     ),
+#     axis.text.x = element_text(size = 12)
+#   )
+# 
+# threshold_figure
+# 
+# # ------------------------------------------------------------
+# # 5. Save
+# # ------------------------------------------------------------
+# 
+# ggsave(
+#   "Figure_below_threshold_by_status_and_outcome.pdf",
+#   threshold_figure,
+#   width = 8.5,
+#   height = 7,
+#   bg = "white"
+# )
+# 
+# 
+# 
+# 
+# 
+# # ============================================================
+# # STATISTICAL TESTS:
+# # COMMUNITY VS HERITAGE LANGUAGES BELOW THRESHOLD
+# #
+# # Outcomes:
+# # 1. Active language use
+# # 2. Interlocutor matching
+# #
+# # Groups:
+# # 1. Community-Heritage bilinguals: Exact McNemar
+# # 2. Trilinguals+: Binomial GLMM
+# # ============================================================
+#  #From code review 
+# 
+# 
+# 
+# 
+# 
+# # ------------------------------------------------------------
+# # 1. Prepare data for both outcomes
+# # ------------------------------------------------------------
+# 
+# threshold_test_data <- threshold_plot_data %>%
+#   select(
+#     internal_id,
+#     language,
+#     language_group,
+#     language_type,
+#     below_activeness,
+#     below_matching
+#   ) %>%
+#   pivot_longer(
+#     cols = c(below_activeness, below_matching),
+#     names_to = "outcome_metric",
+#     values_to = "below_threshold"
+#   ) %>%
+#   mutate(
+#     outcome_metric = recode(
+#       outcome_metric,
+#       below_activeness = "Active language use",
+#       below_matching = "Interlocutor matching"
+#     ),
+#     below_threshold = as.integer(below_threshold),
+#     language_type = factor(
+#       language_type,
+#       levels = c("Community", "Heritage")
+#     )
+#   ) %>%
+#   filter(!is.na(below_threshold))
+# 
+# # Check observations for each group and outcome
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     N_languages = n(),
+#     N_children = n_distinct(internal_id),
+#     N_below = sum(below_threshold),
+#     Percent_below = 100 * mean(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# 
+# # ============================================================
+# # 2. COMMUNITY-HERITAGE BILINGUALS
+# # Exact paired McNemar tests
+# # ============================================================
+# 
+# bilingual_data <- threshold_test_data %>%
+#   filter(
+#     language_group == "Community–Heritage bilinguals"
+#   )
+# 
+# # Check that there is no more than one observation
+# # per child, language type, and outcome.
+# 
+# bilingual_duplicates <- bilingual_data %>%
+#   count(
+#     internal_id,
+#     outcome_metric,
+#     language_type
+#   ) %>%
+#   filter(n > 1)
+# 
+# print(bilingual_duplicates)
+# 
+# if (nrow(bilingual_duplicates) > 0) {
+#   stop("Duplicate child-language type observations found.")
+# }
+# 
+# # Create paired dataset:
+# # One row per child per outcome
+# bilingual_paired <- bilingual_data %>%
+#   select(
+#     internal_id,
+#     outcome_metric,
+#     language_type,
+#     below_threshold
+#   ) %>%
+#   pivot_wider(
+#     names_from = language_type,
+#     values_from = below_threshold
+#   ) %>%
+#   filter(
+#     !is.na(Community),
+#     !is.na(Heritage)
+#   )
+# 
+# # Check sample sizes
+# bilingual_paired %>%
+#   count(outcome_metric, name = "N_paired_children")
+# 
+# 
+# 
+# # ============================================================
+# # AUDIT: Exploratory threshold comparisons
+# # ============================================================
+# 
+# # A. Verify threshold coding
+# stopifnot(
+#   all(
+#     threshold_plot_data$below_activeness[
+#       !is.na(threshold_plot_data$active_use)
+#     ] ==
+#       as.integer(
+#         threshold_plot_data$active_use[
+#           !is.na(threshold_plot_data$active_use)
+#         ] < ACTIVE_THRESHOLD
+#       )
+#   ),
+#   all(
+#     threshold_plot_data$below_matching[
+#       !is.na(threshold_plot_data$interlocutor_matching)
+#     ] ==
+#       as.integer(
+#         threshold_plot_data$interlocutor_matching[
+#           !is.na(threshold_plot_data$interlocutor_matching)
+#         ] < MATCHING_THRESHOLD
+#       )
+#   )
+# )
+# 
+# # B. No duplicated child-language-outcome observations
+# duplicates <- threshold_test_data %>%
+#   count(internal_id, language, outcome_metric) %>%
+#   filter(n > 1)
+# 
+# stopifnot(nrow(duplicates) == 0)
+# 
+# # C. Summarize sample sizes and event counts
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     n_children = n_distinct(internal_id),
+#     n_languages = n(),
+#     n_below = sum(below_threshold),
+#     pct_below = round(
+#       100 * mean(below_threshold), 1
+#     ),
+#     .groups = "drop"
+#   )
+# 
+# # D. Verify Community-Heritage bilingual pairs
+# bilingual_data %>%
+#   count(internal_id, outcome_metric) %>%
+#   count(outcome_metric, n, name = "n_children")
+# 
+# bilingual_paired %>%
+#   count(outcome_metric, name = "complete_pairs")
+# 
+# # E. Verify figure summaries agree with test data
+# summary_from_tests <- threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group,
+#     language_type
+#   ) %>%
+#   summarise(
+#     n_languages_check = n(),
+#     n_below_check = sum(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# threshold_summary %>%
+#   left_join(
+#     summary_from_tests,
+#     by = c(
+#       "outcome_metric",
+#       "language_group",
+#       "language_type"
+#     )
+#   ) %>%
+#   filter(
+#     is.na(n_languages_check) |
+#     n_languages != n_languages_check |
+#     n_below != n_below_check
+#   )
+# 
+# 
+# 
+# 
+# 
+# # ------------------------------------------------------------
+# # Function for exact paired comparisons
+# # ------------------------------------------------------------
+# 
+# run_paired_test <- function(data, outcome_name) {
+# 
+#   dat <- data %>%
+#     filter(outcome_metric == outcome_name)
+# 
+#   # Paired contingency table
+#   paired_table <- table(
+#     Community = factor(
+#       dat$Community,
+#       levels = c(0, 1)
+#     ),
+#     Heritage = factor(
+#       dat$Heritage,
+#       levels = c(0, 1)
+#     )
+#   )
+# 
+#   cat("\n=================================\n")
+#   cat("OUTCOME:", outcome_name, "\n")
+#   cat("=================================\n")
+# 
+#   print(paired_table)
+# 
+#   # Discordant pairs
+#   # 1 = language falls below threshold
+# 
+#   # Heritage below, Community above
+#   b <- sum(
+#     dat$Community == 0 &
+#     dat$Heritage == 1
+#   )
+# 
+#   # Community below, Heritage above
+#   c <- sum(
+#     dat$Community == 1 &
+#     dat$Heritage == 0
+#   )
+# 
+#   cat("\nHeritage below, Community above:", b)
+#   cat("\nCommunity below, Heritage above:", c)
+#   cat("\nTotal discordant pairs:", b + c, "\n")
+# 
+#   # Exact McNemar test
+#   # Computed through exact binomial test
+#   if (b + c > 0) {
+# 
+#     exact_result <- binom.test(
+#       x = b,
+#       n = b + c,
+#       p = 0.5
+#     )
+# 
+#     print(exact_result)
+# 
+#     p_value <- exact_result$p.value
+# 
+#   } else {
+# 
+#     cat("No discordant pairs.\n")
+#     p_value <- 1
+#   }
+# 
+#   tibble(
+#     Outcome = outcome_name,
+#     N_children = nrow(dat),
+#     Heritage_below_Community_above = b,
+#     Community_below_Heritage_above = c,
+#     Discordant_pairs = b + c,
+#     p_value = p_value
+#   )
+# }
+# 
+# # ------------------------------------------------------------
+# # Run test separately for both outcomes
+# # ------------------------------------------------------------
+# 
+# bilingual_results <- map_dfr(
+#   c(
+#     "Active language use",
+#     "Interlocutor matching"
+#   ),
+#   ~ run_paired_test(
+#     bilingual_paired,
+#     .x
+#   )
+# )
+# 
+# bilingual_results
+# 
+# 
+# # ============================================================
+# # 3. TRILINGUALS+
+# # Binomial logistic mixed-effects models
+# # ============================================================
+# 
+# trilingual_data <- threshold_test_data %>%
+#   filter(
+#     language_group == "Trilinguals+"
+#   ) %>%
+#   droplevels()
+# 
+# # Check observations and sample sizes
+# trilingual_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_type
+#   ) %>%
+#   summarise(
+#     N_languages = n(),
+#     N_children = n_distinct(internal_id),
+#     N_below = sum(below_threshold),
+#     Percent_below = 100 * mean(below_threshold),
+#     .groups = "drop"
+#   )
+# 
+# 
+# # ------------------------------------------------------------
+# # Function to fit GLMM for each outcome
+# # ------------------------------------------------------------
+# 
+# run_trilingual_model <- function(data, outcome_name) {
+# 
+#   dat <- data %>%
+#     filter(outcome_metric == outcome_name) %>%
+#     droplevels()
+# 
+#   cat("\n=================================\n")
+#   cat("TRILINGUAL MODEL:", outcome_name, "\n")
+#   cat("=================================\n")
+# 
+#   cat("\nObservations:", nrow(dat))
+#   cat("\nChildren:", n_distinct(dat$internal_id), "\n")
+# 
+#   # Null model
+#   null_model <- glmer(
+#     below_threshold ~
+#       1 +
+#       (1 | internal_id),
+#     data = dat,
+#     family = binomial,
+#     control = glmerControl(
+#       optimizer = "bobyqa"
+#     )
+#   )
+# 
+#   # Language type model
+#   language_model <- glmer(
+#     below_threshold ~
+#       language_type +
+#       (1 | internal_id),
+#     data = dat,
+#     family = binomial,
+#     control = glmerControl(
+#       optimizer = "bobyqa"
+#     )
+#   )
+# 
+#   # Likelihood-ratio comparison
+#   comparison <- anova(
+#     null_model,
+#     language_model,
+#     test = "Chisq"
+#   )
+# 
+#   cat("\nMODEL COMPARISON\n")
+#   print(comparison)
+# 
+#   cat("\nMODEL COEFFICIENTS\n")
+#   print(summary(language_model))
+# 
+#   # Odds ratios and 95% Wald CI
+#   odds_ratios <- broom.mixed::tidy(
+#     language_model,
+#     effects = "fixed",
+#     conf.int = TRUE,
+#     conf.method = "Wald",
+#     exponentiate = TRUE
+#   )
+# 
+#   cat("\nODDS RATIOS\n")
+#   print(odds_ratios)
+# 
+#   # Diagnostics
+#   cat("\nMODEL DIAGNOSTICS\n")
+# 
+#   cat("Singular fit:",
+#       isSingular(language_model), "\n")
+# 
+#   cat("Convergence messages:\n")
+#   print(language_model@optinfo$conv$lme4$messages)
+# 
+#   print(VarCorr(language_model))
+# 
+#   # Save all results
+#   list(
+#     null_model = null_model,
+#     language_model = language_model,
+#     comparison = comparison,
+#     odds_ratios = odds_ratios,
+#     singular = isSingular(language_model),
+#     convergence_messages =
+#       language_model@optinfo$conv$lme4$messages
+#   )
+# }
+# 
+# 
+# # ------------------------------------------------------------
+# # Run models for both outcomes
+# # ------------------------------------------------------------
+# 
+# trilingual_active <- run_trilingual_model(
+#   trilingual_data,
+#   "Active language use"
+# )
+# 
+# trilingual_matching <- run_trilingual_model(
+#   trilingual_data,
+#   "Interlocutor matching"
+# )
+# 
+# 
+# # ============================================================
+# # 4. Extract results for reporting
+# # ============================================================
+# 
+# # Paired comparisons
+# bilingual_results
+# 
+# 
+# # Trilingual odds ratios
+# trilingual_results <- bind_rows(
+#   trilingual_active$odds_ratios %>%
+#     mutate(Outcome = "Active language use"),
+# 
+#   trilingual_matching$odds_ratios %>%
+#     mutate(Outcome = "Interlocutor matching")
+# ) %>%
+#   filter(term == "language_typeHeritage") %>%
+#   select(
+#     Outcome,
+#     term,
+#     estimate,
+#     conf.low,
+#     conf.high,
+#     p.value
+#   )
+# 
+# trilingual_results
+# 
+# 
+# # ============================================================
+# # 5. Final checks
+# # ============================================================
+# 
+# # Check duplicate child-language observations
+# threshold_test_data %>%
+#   count(
+#     internal_id,
+#     language,
+#     outcome_metric
+#   ) %>%
+#   filter(n > 1)
+# 
+# # Confirm group sample sizes
+# threshold_test_data %>%
+#   group_by(
+#     outcome_metric,
+#     language_group
+#   ) %>%
+#   summarise(
+#     N_children = n_distinct(internal_id),
+#     N_languages = n(),
+#     .groups = "drop"
+#   )
+# 
+# 
+# 
+# 
+
+
+
+```
+
+Methods information and descriptive statistics
+```{r methods descriptives}
+
+#------------------------------------------
+# GENDER SUMMARY
+#------------------------------------------
+
+
+gender_summary <- clean_w_predictors %>%
+  count(child_gender, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+gender_summary
+
+# Pie chart of child gender
+ggplot(
+  gender_summary,
+  aes(x = "", y = n, fill = child_gender)
+) +
+  geom_col(
+    width = 1,
+    color = "white"
+  ) +
+  coord_polar(theta = "y") +
+  
+  # Custom slice colors
+  scale_fill_manual(
+    values = c(
+      "#B0DA87",
+      "#FAE0BD",
+      "#8DAEE1"
+    )
+  ) +
+  
+  geom_text(
+    aes(
+      label = paste0(
+        child_gender, "\n",
+        "n = ", n, " (", percent, "%)"
+      )
+    ),
+    position = position_stack(vjust = 0.5),
+    size = 15 / ggplot2::.pt   # 15-point font
+  ) +
+  
+  labs(
+    fill = "Child gender"
+  ) +
+  
+  theme_void(base_size = 20) +
+  
+  theme(
+    legend.position = "none"
+  )
+
+
+
+#---------------------------------------------------------------
+# PARENT GENDER SUMMARY
+#---------------------------------------------------------------
+
+respondent_summary <- clean_w_predictors %>%
+  count(caregiver_1, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+#maternal_education <- 
+
+
+# Pie chart of respondent
+ggplot(
+  respondent_summary,
+  aes(x = "", y = n, fill = caregiver_1)
+) +
+  geom_col(
+    width = 1,
+    color = "white"
+  ) +
+  coord_polar(theta = "y") +
+  
+  # Custom slice colors
+  scale_fill_manual(
+    values = c(
+      "#B0DA87",
+      "#FAE0BD",
+      "#8DAEE1"
+    )
+  ) +
+  
+  geom_text(
+    aes(
+      label = paste0(
+        caregiver_1, "\n",
+        "n = ", n, " (", percent, "%)"
+      )
+    ),
+    position = position_stack(vjust = 0.3),
+    size = 15 / ggplot2::.pt   # 15-point font
+  ) +
+  
+  labs(
+    fill = "caregiver_1"
+  ) +
+  
+  theme_void(base_size = 25) +
+  
+  theme(
+    legend.position = "none"
+  )
+
+
+
+
+#---------------------------------------------------------------
+# AGE SUMMARY
+#---------------------------------------------------------------
+
+age_summary <- clean_w_predictors %>%
+  summarise(
+    n = sum(!is.na(child_age_years)),
+    mean_age = round(mean(child_age_years, na.rm = TRUE), 2),
+    sd_age = round(sd(child_age_years, na.rm = TRUE), 2),
+    min_age = min(child_age_years, na.rm = TRUE),
+    max_age = max(child_age_years, na.rm = TRUE)
+  )
+
+age_summary
+
+#--------------------------
+# REGION SUMMARY
+#-------------------------
+
+
+
+region_summary <- clean_w_predictors %>%
+  filter(!is.na(census_subdivision)) %>%
+  count(census_subdivision, sort = TRUE, name = "n") %>%
+  mutate(
+    percent = round(n / sum(n) * 100, 1)
+  )
+
+region_summary
+
+n_regions <- clean_w_predictors %>%
+  summarise(
+    n_regions = n_distinct(census_subdivision, na.rm = TRUE)
+  )
+
+n_regions
+
+languages_per_child <- long_with_predictors %>%
+  filter(!is.na(language)) %>%
+  distinct(internal_id, language) %>%
+  count(internal_id, name = "n_languages") %>%
+      filter(!(n_languages==1)) # I need to do this before so this child is filtered.
+
+
+ggplot(
+  region_summary,
+  aes(
+    x = n,
+    y = reorder(census_subdivision, n)
+  )
+) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = paste0(n, " (", percent, "%)")),
+    hjust = -0.2,
+    size = 3.8
+  ) +
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  scale_x_continuous(
+    breaks = scales::pretty_breaks(),
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# Keep the six most represented regions
+top_regions <- region_summary %>%
+  filter(
+    census_subdivision %in% c(
+      "Montréal",
+      "Québec",
+      "Gatineau",
+      "Sherbrooke",
+      "Rivière-du-Loup",
+      "Drummond"
+    )
+  ) %>%
+  mutate(
+    census_subdivision = factor(
+      census_subdivision,
+      levels = c(
+        "Drummond",
+        "Rivière-du-Loup",
+        "Sherbrooke",
+        "Gatineau",
+        "Québec",
+        "Montréal"
+      )
+    )
+  )
+
+ggplot(
+  top_regions,
+  aes(
+    x = n,
+    y = census_subdivision,
+    fill = census_subdivision
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  
+  # n and percentage at the end of each bar
+  geom_text(
+    aes(
+      label = paste0(
+        n, " (", percent, "%)"
+      )
+    ),
+    hjust = -0.15,
+    size = 15 / ggplot2::.pt
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      "Montréal"       = "#B0DA87",
+      "Québec"         = "#FAE0BD",
+      "Gatineau"       = "#8DAEE1",
+      "Sherbrooke"     = "#C6A7D8",
+      "Rivière-du-Loup" = "#86C5B5",
+      "Drummond"       = "#F4B183"
+    )
+  ) +
+  
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  
+  theme_classic(base_size = 35) +
+  
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20),
+    axis.title.x = element_text(size = 20)
+  )
+
+
+
+#---------------------------------------------
+#LANGUAGE COMBINATION
+#--------------------------------------------
+
+# 1. IDENTIFY EACH CHILD'S LANGUAGE COMBINATION
+
+
+language_composition <- model_data_long %>%
+  
+  # One row per child-language
+  distinct(internal_id, language, language_type) %>%
+  
+  group_by(internal_id) %>%
+  
+  summarise(
+    n_languages = n_distinct(language),
+    
+    n_english = sum(language_type == "English"),
+    n_french = sum(language_type == "French"),
+    n_minority = sum(language_type == "Minority"),
+    
+    .groups = "drop"
+  ) %>%
+  
+  # Broad number-of-languages category
+  mutate(
+    multilingual_group = case_when(
+      n_languages == 1 ~ "Monolingual",
+      n_languages == 2 ~ "Bilingual",
+      n_languages == 3 ~ "Trilingual",
+      n_languages >= 4 ~ "4+ languages"
+    ),
+    
+    # Composition within each category
+    language_combination = case_when(
+      
+      # -----------------------
+      # Monolingual
+      # -----------------------
+      n_languages == 1 & n_english == 1 ~ "English",
+      n_languages == 1 & n_french == 1 ~ "French",
+      n_languages == 1 & n_minority == 1 ~ "Minority",
+      
+      
+      # -----------------------
+      # Bilingual
+      # -----------------------
+      n_languages == 2 &
+        n_english == 1 & n_french == 1 ~
+        "English + French",
+      
+      n_languages == 2 &
+        n_english == 1 & n_minority == 1 ~
+        "English + Minority",
+      
+      n_languages == 2 &
+        n_french == 1 & n_minority == 1 ~
+        "French + Minority",
+      
+      n_languages == 2 &
+        n_minority == 2 ~
+        "Minority + Minority",
+      
+      
+      # -----------------------
+      # Trilingual
+      # -----------------------
+      n_languages == 3 &
+        n_english == 1 &
+        n_french == 1 &
+        n_minority == 1 ~
+        "English + French + Minority",
+      
+      n_languages == 3 &
+        n_english == 1 &
+        n_minority == 2 ~
+        "English + 2 Minority",
+      
+      n_languages == 3 &
+        n_french == 1 &
+        n_minority == 2 ~
+        "French + 2 Minority",
+      
+      n_languages == 3 &
+        n_minority == 3 ~
+        "3 Minority",
+      
+      
+      # -----------------------
+      # 4+
+      # -----------------------
+      n_languages >= 4 ~ "4+ languages",
+      
+      TRUE ~ "Other"
+    )
+  )
+
+
+
+language_composition %>%
+  count(
+    multilingual_group,
+    language_combination
+  )
+
+
+# ============================================================
+# 2. CREATE STACKED-BAR DATA
+# ============================================================
+
+language_composition_summary <- language_composition %>%
+  count(
+    multilingual_group,
+    language_combination,
+    name = "n"
+  ) %>%
+  group_by(multilingual_group) %>%
+  mutate(
+    group_total = sum(n),
+    percent_within_group = n / group_total * 100
+  ) %>%
+  ungroup() %>%
+  mutate(
+    total_sample = sum(n),
+    group_percent = group_total / total_sample * 100,
+    
+    multilingual_group = factor(
+      multilingual_group,
+      levels = c(
+        "Monolingual",
+        "Bilingual",
+        "Trilingual",
+        "4+ languages"
+      )
+    )
+  )
+  
+
+
+# ============================================================
+# 3. STACKED LANGUAGE-COMBINATION GRAPH
+# ============================================================
+
+# Set explicit order for bars
+language_composition_summary <- language_composition_summary %>%
+  mutate(
+    multilingual_group = factor(
+      multilingual_group,
+      levels = c(
+        "Bilingual",
+        "Trilingual",
+        "4+ languages"
+      )
+    ),
+    
+    # Explicit order for slices AND legend
+    language_combination = factor(
+      language_combination,
+      levels = c(
+        # Bilingual
+        "English + French",
+        "French + Minority",
+        "English + Minority",
+        "Minority + Minority",
+        
+        # Trilingual
+        "English + French + Minority",
+        "French + 2 Minority",
+        "English + 2 Minority",
+        "3 Minority",
+        
+        # 4+
+        "4+ languages"
+      )
+    )
+  )
+
+
+ggplot(
+  language_composition_summary,
+  aes(
+    x = multilingual_group,
+    y = n,
+    fill = language_combination
+  )
+) +
+  
+  geom_col(
+    width = 0.7,
+    color = "white",
+    linewidth = 0.8
+  ) +
+  
+  # Percentage of entire sample above each bar
+  geom_text(
+    data = language_composition_summary %>%
+      distinct(
+        multilingual_group,
+        group_total,
+        group_percent
+      ),
+    aes(
+      x = multilingual_group,
+      y = group_total,
+      label = paste0(
+        round(group_percent, 1),
+        "%"
+      )
+    ),
+    inherit.aes = FALSE,
+    vjust = -0.5,
+    size = 20 / ggplot2::.pt
+  ) +
+  
+  scale_fill_manual(
+    values = c(
+      # -------------------------
+      # Bilingual combinations
+      # -------------------------
+      "English + French" = "#B0DA87",
+      "French + Minority" = "#8DAEE1",
+      "English + Minority" = "#FAE0BD",
+      "Minority + Minority" = "#C6A7D8",
+      
+      # -------------------------
+      # Trilingual combinations
+      # -------------------------
+      "English + French + Minority" = "#69B3A2",
+      "French + 2 Minority" = "#7896CC",
+      "English + 2 Minority" = "#F2B879",
+      "3 Minority" = "#9A77B5",
+      
+      # -------------------------
+      # 4+
+      # -------------------------
+      "4+ languages" = "#777777"
+    ),
+    
+    breaks = c(
+      "English + French",
+      "French + Minority",
+      "English + Minority",
+      "Minority + Minority",
+      "English + French + Minority",
+      "French + 2 Minority",
+      "English + 2 Minority",
+      "3 Minority",
+      "4+ languages"
+    ),
+    
+    name = "Language combination",
+    drop = TRUE
+  ) +
+  
+  labs(
+    x = NULL,
+    y = "Number of children"
+  ) +
+  
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.12))
+  ) +
+  
+  theme_classic(base_size = 20) +
+  
+  theme(
+    legend.position = "right",
+    legend.title = element_text(size = 20),
+    legend.text = element_text(size = 18),
+    axis.text = element_text(size = 20),
+    axis.title = element_text(size = 20)
+  )
+
+
+#----------------------
+#MINORITY LANGUAGES
+#---------------------
+
+minority_language_summary <- model_data_long %>%
+  mutate(
+    language = case_when(
+      # Combine Creole languages
+      str_detect(language, regex("creole|créole", ignore_case = TRUE)) ~ "Creole languages",
+
+      # Standardize language names
+      language %in% c("italien", "Italian") ~ "Italian",
+      language %in% c("Russe", "Russian") ~ "Russian",
+      language == "Arabe" ~ "Arabic",
+      language == "francais" ~ "French",
+      language == "le lingala" ~ "Lingala",
+      language == "QSL" ~ "Quebec Sign Language",
+
+      TRUE ~ language
+    )
+  ) %>%
+  filter(
+    !is.na(language),
+    !language %in% c("French", "English", "Non")
+  ) %>%
+  distinct(internal_id, language) %>%
+  count(language, sort = TRUE, name = "n_children") %>%
+  mutate(
+    percent_sample = round(
+      n_children / n_distinct(model_data_long$internal_id) * 100,
+      1
+    )
+  )
+
+minority_language_summary
+
+
+top_minority_languages <- minority_language_summary %>%
+  filter(
+    language %in% c(
+      "Spanish",
+      "German",
+      "Portuguese",
+      "Italian"
+    )
+  ) %>%
+  mutate(
+    language = factor(
+      language,
+      levels = c(
+        "Italian",
+        "Portuguese",
+        "German",
+        "Spanish"
+      )
+    )
+  )
+
+
+ggplot(
+  top_minority_languages,
+  aes(
+    x = n_children,
+    y = language,
+    fill = language
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  
+  # Counts at end of bars
+  geom_text(
+    aes(
+      label = n_children
+    ),
+    hjust = -0.3,
+    size = 20 / ggplot2::.pt
+  ) +
+  
+  # Different color for each language
+  scale_fill_manual(
+    values = c(
+      "Spanish"    = "#B0DA87",
+      "German"     = "#FAE0BD",
+      "Portuguese" = "#8DAEE1",
+      "Italian"    = "#C6A7D8"
+    )
+  ) +
+  
+  labs(
+    x = "Number of children",
+    y = NULL
+  ) +
+  
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.08))
+  ) +
+  
+  theme_classic(base_size = 20) +
+  
+  theme(
+    legend.position = "none",
+    axis.text = element_text(size = 20),
+    axis.title.x = element_text(size = 20)
+  )
+
+
+
+#AOA DESCRIPTIVES
+
+aoa_long <- clean_w_predictors %>%
+  select(
+    internal_id,
+    aoa_english_child,
+    aoa_french_child,
+    aoa_first_min_child,
+    aoa_second_min_child,
+    aoa_third_min_child
+  ) %>%
+  pivot_longer(
+    cols = starts_with("aoa_"),
+    names_to = "language",
+    values_to = "aoa"
+  ) %>%
+  mutate(
+    language_type = case_when(
+      language %in% c("aoa_english_child", "aoa_french_child") ~ "Community",
+      TRUE ~ "Heritage"
+    )
+  ) %>%
+  filter(!is.na(aoa))
+
+
+
+
+
+```
+
+
+```{r predictors tables methods}
+
+
+
+
+child_data <- logistic_data %>%
+  distinct(internal_id, .keep_all = TRUE)
+
+# Language-level observations
+language_data <- model_data_long %>%
+  mutate(
+    language_type = factor(
+      as.character(language_type),
+      levels = c("Community", "Heritage")
+    )
+  )
+
+# Dictionary of predictors
+# Edit names if they differ from your current dataset.
+
+predictor_dictionary <- tribble(
+  ~variable, ~label, ~analyses_level, ~layer,
+
+  "child_age_years", "Child age (years)",
+  "Both", "Child characteristics",
+
+  "multilingual_rate", "Multilingualism rate",
+  "Language agnostic", "Societal environment",
+
+  "speaker_rate", "By-language speaker rate",
+  "Language specific", "Societal environment",
+
+  "book_resources", "Access to books",
+  "Language specific", "Family environment",
+
+  "overall_exposure", "Overall language exposure",
+  "Language specific", "Family environment",
+
+  "book_reading", "Book reading",
+  "Language specific", "Family environment",
+
+  "number_sources", "Number of language sources",
+  "Language specific", "Family environment",
+
+  "beleifs_ahead_in_life", "Status attitudes",
+  "Language agnostic", "Family environment",
+
+  "beleifs_belonging", "Solidarity attitudes",
+  "Language agnostic", "Family environment",
+
+  "beliefs_cognitive_benefits", "Cognition attitudes",
+  "Language agnostic", "Family environment",
+
+  "worry_master_languages", "Exposure-fluency concern",
+  "Language agnostic", "Family environment",
+
+  "worry_cognitive_difficulties",
+  "Cognitive difficulties concern",
+  "Language agnostic", "Family environment",
+
+  "worry_school_difficulties",
+  "School difficulties concern",
+  "Language agnostic", "Family environment"
+)
+
+# Check which variables are missing
+predictor_dictionary %>%
+  mutate(
+    available = map2_lgl(variable, analyses_level, function(v, lvl) {
+      v %in% names(
+        if (lvl == "Child") child_data else language_data
+      )
+    })
+  ) %>%
+  filter(!available)
+
+
+
+summarise_predictor <- function(data, variable) {
+
+  x <- data[[variable]]
+
+  if (!is.numeric(x)) {
+    stop("Variable is not numeric: ", variable)
+  }
+
+  x <- x[is.finite(x)]
+
+  tibble(
+    N = length(x),
+    Mean = if (length(x)) mean(x) else NA_real_,
+    SD = if (length(x) > 1) sd(x) else NA_real_,
+    Median = if (length(x)) median(x) else NA_real_,
+    Minimum = if (length(x)) min(x) else NA_real_,
+    Maximum = if (length(x)) max(x) else NA_real_
+  )
+}
+
+
+# ============================================================
+# Create descriptive statistics for all predictors
+# using the updated predictor dictionary
+# ============================================================
+
+make_predictor_summary <- function(
+    dictionary,
+    child_data,
+    language_data
+) {
+
+  results <- vector("list", nrow(dictionary))
+
+  for (i in seq_len(nrow(dictionary))) {
+
+    # Extract information from dictionary
+    v <- dictionary$variable[i]
+    analysis <- dictionary$analyses_level[i]
+
+    # Select dataset based on analysis level
+    if (analysis %in% c("Both", "Language agnostic")) {
+
+      dat <- child_data
+
+    } else if (analysis == "Language specific") {
+
+      dat <- language_data
+
+    } else {
+
+      stop(
+        "Unknown analyses_level for variable ",
+        v, ": ", analysis
+      )
+    }
+
+    # Check that variable exists in selected dataset
+    if (!v %in% names(dat)) {
+      stop(
+        "Variable '", v,
+        "' not found in dataset for ",
+        analysis
+      )
+    }
+
+    # Calculate descriptive statistics
+    results[[i]] <- dplyr::bind_cols(
+      dictionary[i, ],
+      summarise_predictor(dat, v)
+    )
+  }
+
+  # Combine all predictor summaries
+  dplyr::bind_rows(results)
+}
+
+# ============================================================
+# Generate overall descriptive statistics
+# ============================================================
+
+overall_summary <- make_predictor_summary(
+  dictionary = predictor_dictionary,
+  child_data = child_data,
+  language_data = language_data
+)
+
+overall_summary
+
+
+
+format_predictor_table <- function(summary_data) {
+
+  summary_data %>%
+    mutate(
+      `M (SD)` = if_else(
+        is.na(SD),
+        sprintf("%.2f (—)", Mean),
+        sprintf("%.2f (%.2f)", Mean, SD)
+      ),
+      Median = sprintf("%.2f", Median),
+      Range = sprintf("%.2f–%.2f", Minimum, Maximum)
+    ) %>%
+    select(
+      Layer = layer,
+      Predictor = label,
+      `Analysis level` = analyses_level,
+      N,
+      `M (SD)`,
+      Median,
+      Range
+    )
+}
+
+# Generate formatted table
+table1_data <- format_predictor_table(overall_summary)
+
+table1 <- flextable::flextable(table1_data) %>%
+  flextable::theme_booktabs() %>%
+  flextable::fontsize(size = 9, part = "all") %>%
+  flextable::autofit()
+
+table1
+
+
+
+save_as_docx(
+  "Table 1. Predictor descriptive statistics" = table1,
+  path = "Table1_predictor_descriptives.docx"
+)
+
+
+
+
+language_dictionary <- predictor_dictionary %>%
+  filter(analyses_level == "Language specific")
+
+group_summary <- bind_rows(
+  lapply(c("Community", "Heritage"), function(group) {
+
+    dat <- language_data %>%
+      filter(language_type == group)
+
+    results <- lapply(
+      seq_len(nrow(language_dictionary)),
+      function(i) {
+
+        bind_cols(
+          language_dictionary[i, ],
+          summarise_predictor(
+            dat,
+            language_dictionary$variable[i]
+          )
+        )
+      }
+    )
+
+    bind_rows(results) %>%
+      mutate(Language_group = group)
+  })
+)
+
+tableS1_data <- group_summary %>%
+  mutate(
+    `M (SD)` = sprintf("%.2f (%.2f)", Mean, SD),
+    Median = sprintf("%.2f", Median),
+    Range = sprintf("%.2f–%.2f", Minimum, Maximum)
+  ) %>%
+  select(
+    Predictor = label,
+    Language_group,
+    N,
+    `M (SD)`,
+    Median,
+    Range
+  )
+
+tableS1 <- flextable(tableS1_data) %>%
+  theme_booktabs() %>%
+  fontsize(size = 9, part = "all") %>%
+  autofit()
+
+tableS1
+
+save_as_docx(
+  "Table S1. Predictors by language type" = tableS1,
+  path = "TableS1_community_heritage.docx"
+)
+
+
+
+# Prepare long-format distributions using the
+# appropriate observation unit for each variable.
+
+
+# ============================================================
+# Prepare predictor distributions for supplementary figure
+# ============================================================
+
+distribution_list <- lapply(
+  seq_len(nrow(predictor_dictionary)),
+  function(i) {
+
+    # Extract variable and analysis level
+    v <- predictor_dictionary$variable[i]
+    analysis <- predictor_dictionary$analyses_level[i]
+
+    # Select the appropriate dataset
+    if (analysis %in% c("Both", "Language agnostic")) {
+
+      dat <- child_data
+
+    } else if (analysis == "Language specific") {
+
+      dat <- language_data
+
+    } else {
+
+      stop(
+        "Unknown analyses_level for variable ",
+        v, ": ", analysis
+      )
+    }
+
+    # Check that variable exists
+    if (!v %in% names(dat)) {
+      stop("Variable not found: ", v)
+    }
+
+    # Create long-format distribution data
+tibble(
+  Variable = predictor_dictionary$label[i],
+  Analysis_level = analysis,
+  Layer = predictor_dictionary$layer[i],
+  Value = as.numeric(dat[[v]])
+)
+  }
+)
+
+# Combine distributions into one dataframe
+predictor_distributions <- dplyr::bind_rows(
+  distribution_list
+) %>%
+  filter(is.finite(Value)) %>%
+  mutate(
+    Variable = factor(
+      Variable,
+      levels = unique(predictor_dictionary$label)
+    )
+  )
+
+
+figureS1 <- ggplot(
+  predictor_distributions,
+  aes(x = Value)
+) +
+  geom_histogram(
+    bins = 15,
+    fill = "#8DAEE1",
+    color = "white",
+    linewidth = 0.3
+  ) +
+  facet_wrap(
+    ~ Variable,
+    scales = "free",
+    ncol = 3
+  ) +
+  labs(
+    x = "Observed value",
+    y = "Frequency"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    strip.text = element_text(
+      size = 12,
+      face = "bold"
+    ),
+    panel.spacing = unit(1.2, "lines")
+  )
+
+figureS1
+
+ggsave(
+  "FigureS1_predictor_distributions.pdf",
+  figureS1,
+  width = 11,
+  height = 12
+)
+
+#Make the panels go like child language, then the percentage based measures, then number of sources, then the 1 to 7 scales. Make the percentage based have the same scale.
+
+#Make that same figure but for heritage languages
+
+
+# ============================================================
+# FIGURE S2: ALL PREDICTOR DISTRIBUTIONS
+# Children with Heritage languages
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Identify children with Heritage languages
+# ------------------------------------------------------------
+
+heritage_data <- model_data_long %>%
+  filter(language_type == "Heritage")
+
+heritage_ids <- heritage_data %>%
+  distinct(internal_id)
+
+# Child-level data: one observation per child
+heritage_child_data <- child_data %>%
+  semi_join(heritage_ids, by = "internal_id") %>%
+  distinct(internal_id, .keep_all = TRUE)
+
+# ------------------------------------------------------------
+# 2. Prepare distributions for ALL predictors
+# ------------------------------------------------------------
+
+heritage_distribution_list <- lapply(
+  seq_len(nrow(predictor_dictionary)),
+  function(i) {
+
+    v <- predictor_dictionary$variable[i]
+    analysis <- predictor_dictionary$analyses_level[i]
+
+    # Choose dataset according to analysis level
+    if (analysis %in% c("Both", "Language agnostic")) {
+
+      dat <- heritage_child_data
+
+    } else if (analysis == "Language specific") {
+
+      dat <- heritage_data
+
+    } else {
+
+      stop("Unknown analysis level: ", analysis)
+    }
+
+    # Verify variable exists
+    if (!v %in% names(dat)) {
+      stop("Variable not found: ", v)
+    }
+
+    tibble(
+      Variable = predictor_dictionary$label[i],
+      Analysis_level = analysis,
+      Layer = predictor_dictionary$layer[i],
+      Value = as.numeric(dat[[v]])
+    )
+  }
+)
+
+heritage_distributions <- bind_rows(
+  heritage_distribution_list
+) %>%
+  filter(is.finite(Value)) %>%
+  mutate(
+    Variable = factor(
+      Variable,
+      levels = unique(predictor_dictionary$label)
+    )
+  )
+
+# ------------------------------------------------------------
+# 3. Create histograms
+# ------------------------------------------------------------
+
+figureS2 <- ggplot(
+  heritage_distributions,
+  aes(x = Value)
+) +
+  geom_histogram(
+    bins = 15,
+    fill = "#B0DA87",
+    color = "white",
+    linewidth = 0.3
+  ) +
+  facet_wrap(
+    ~ Variable,
+    scales = "free",
+    ncol = 3
+  ) +
+  labs(
+    x = "Observed value",
+    y = "Frequency"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    strip.text = element_text(
+      size = 12,
+      face = "bold"
+    ),
+    panel.spacing = unit(1.2, "lines")
+  )
+
+# Display
+figureS2
+
+# ------------------------------------------------------------
+# 4. Save figure
+# ------------------------------------------------------------
+
+ggsave(
+  "FigureS2_all_predictors_heritage.pdf",
+  figureS2,
+  width = 11,
+  height = 12,
+  bg = "white"
+)
+
+# ------------------------------------------------------------
+# 5. Check sample sizes
+# ------------------------------------------------------------
+
+heritage_distributions %>%
+  group_by(Variable, Analysis_level) %>%
+  summarise(
+    N = n(),
+    .groups = "drop"
+  )
+
+
+# ============================================================
+# A. Active language use
+# ============================================================
+
+active_plot_data <- model_data_long %>%
+  filter(
+    !is.na(active_use),
+    !is.na(language_type)
+  ) %>%
+  count(language_type, active_use) %>%
+  group_by(language_type) %>%
+  mutate(
+    Percentage = 100 * n / sum(n)
+  ) %>%
+  ungroup()
+
+p_active <- ggplot(
+  active_plot_data,
+  aes(
+    x = factor(active_use),
+    y = Percentage,
+    fill = language_type
+  )
+) +
+  geom_col(
+    position = position_dodge(width = 0.8),
+    width = 0.7
+  ) +
+  scale_fill_manual(
+    values = c(
+      Community = "#8DAEE1",
+      Heritage = "#B0DA87"
+    )
+  ) +
+  labs(
+    title = "A. Active language use",
+    x = "Active use score",
+    y = "Percentage of language observations",
+    fill = "Language type"
+  ) +
+  theme_classic(base_size = 14)
+
+# ============================================================
+# B. Interlocutor matching
+# ============================================================
+
+
+matching_plot_data <- model_data_long %>%
+  filter(
+    !is.na(interlocutor_matching),
+    !is.na(language_type)
+  ) %>%
+  mutate(
+    matching_bin = cut(
+      interlocutor_matching,
+      breaks = c(seq(0, 90, 10), 99.999, 100),
+      include.lowest = TRUE,
+      right = TRUE,
+      labels = c(
+        "0–10", "11–20", "21–30", "31–40",
+        "41–50", "51–60", "61–70",
+        "71–80", "81–90", "91–<100",
+        "100"
+      )
+    )
+  ) %>%
+  count(language_type, matching_bin) %>%
+  group_by(language_type) %>%
+  mutate(
+    Percentage = 100 * n / sum(n)
+  ) %>%
+  ungroup()
+
+
+p_matching <- ggplot(
+  matching_plot_data,
+  aes(
+    x = matching_bin,
+    y = Percentage,
+    fill = language_type
+  )
+) +
+  geom_col(
+    position = position_dodge(width = 0.8),
+    width = 0.7
+  ) +
+  scale_fill_manual(
+    values = c(
+      Community = "#8DAEE1",
+      Heritage = "#B0DA87"
+    )
+  ) +
+  labs(
+    title = "B. Interlocutor matching",
+    x = "Interlocutor matching (%)",
+    y = "Percentage of language observations",
+    fill = "Language type"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+# ============================================================
+# C. Combine plots
+# ============================================================
+
+figure1 <- (p_active | p_matching) +
+  plot_layout(guides = "collect") &
+  theme(
+    legend.position = "bottom"
+  )
+
+figure1
+
+ggsave(
+  "Figure1_outcome_distributions.pdf",
+  figure1,
+  width = 10,
+  height = 5,
+  bg = "white"
+)
+ 
+#For interlocutor matching make the bins smaller like 0-25, 25-50, etc... then like check if haviing the separate bin for 100 makes sense, compare the two graphs.
+
+```
+
+
+
+```{r code audit, model diagnostics}
+
+
+# ============================================================
+# AUDIT: Main mixed-effects model diagnostics
+# ============================================================
+
+library(lme4)
+library(dplyr)
+library(purrr)
+
+models_to_check <- list(
+  active_societal = active_societal,
+  active_family = active_family,
+  active_both = active_both_layers,
+  matching_societal = matching_societal,
+  matching_family = matching_family,
+  matching_both = matching_both_layers
+)
+
+
+
+# ============================================================
+# AUDIT: Model convergence and singularity
+# ============================================================
+
+diagnostic_summary <- purrr::imap_dfr(
+  models_to_check,
+  function(fit, model_name) {
+
+    conv_messages <- fit@optinfo$conv$lme4$messages
+
+    tibble::tibble(
+      model_name = model_name,
+      n_obs = stats::nobs(fit),
+      singular = lme4::isSingular(fit),
+      convergence_warning = if (length(conv_messages) == 0) {
+        "None"
+      } else {
+        paste(conv_messages, collapse = "; ")
+      },
+      residual_sd = stats::sigma(fit)
+    )
+  }
+)
+
+diagnostic_summary
+
+
+
+
+
+library(DHARMa)
+
+set.seed(123)
+active_final_residuals <- simulateResiduals(
+  active_both_layers,
+  n = 1000
+)
+
+set.seed(123)
+matching_final_residuals <- simulateResiduals(
+  matching_societal,
+  n = 1000
+)
+
+# Compact diagnostic tests
+data.frame(
+  model = c("Active: both layers", "Matching: societal"),
+  uniformity_p = c(
+    testUniformity(active_final_residuals, plot = FALSE)$p.value,
+    testUniformity(matching_final_residuals, plot = FALSE)$p.value
+  ),
+  dispersion_p = c(
+    testDispersion(active_final_residuals, plot = FALSE)$p.value,
+    testDispersion(matching_final_residuals, plot = FALSE)$p.value
+  )
+)
+
+# Plot matching model if needed
+plot(matching_final_residuals)
+
+
+
+
+#Because some of the gaussian assumptions are violated, running a bootstrap analysis (sensitivity analyses) to see if the results we found for the LMEM are still significant 
+
+
+# ============================================================
+# SENSITIVITY ANALYSIS: Participant-cluster bootstrap
+# 500 replicates for each selected mixed-effects model
+# ============================================================
+
+library(lme4)
+
+cluster_bootstrap <- function(fit, B = 500, seed = 123) {
+
+  set.seed(seed)
+
+  # Use exactly the observations used in the fitted model
+  dat <- model.frame(fit)
+  original_beta <- lme4::fixef(fit)
+  terms <- names(original_beta)
+
+  # Store each child's rows together
+  child_rows <- split(
+    seq_len(nrow(dat)),
+    as.character(dat$internal_id)
+  )
+
+  child_ids <- names(child_rows)
+  n_children <- length(child_ids)
+
+  # Storage
+  boot_coefs <- matrix(
+    NA_real_,
+    nrow = B,
+    ncol = length(terms),
+    dimnames = list(NULL, terms)
+  )
+
+  failed <- logical(B)
+  singular <- logical(B)
+  convergence <- logical(B)
+
+  for (b in seq_len(B)) {
+
+    # Sample children with replacement
+    sampled <- sample(
+      child_ids,
+      size = n_children,
+      replace = TRUE
+    )
+
+    # Include every language row for each sampled child.
+    # Assign a NEW cluster ID to each sampled copy.
+    boot_dat <- do.call(
+      rbind,
+      lapply(seq_along(sampled), function(i) {
+
+        child_dat <- dat[
+          child_rows[[sampled[i]]],
+          ,
+          drop = FALSE
+        ]
+
+        child_dat$internal_id <- paste0("boot_", i)
+
+        child_dat
+      })
+    )
+
+    boot_dat$internal_id <- factor(
+      boot_dat$internal_id
+    )
+
+    # Refit the same model specification
+    boot_fit <- tryCatch(
+      suppressWarnings(
+        lme4::lmer(
+          formula(fit),
+          data = boot_dat,
+          REML = FALSE,
+          control = lme4::lmerControl(
+            optimizer = "bobyqa",
+            optCtrl = list(maxfun = 100000)
+          )
+        )
+      ),
+      error = function(e) NULL
+    )
+
+    if (is.null(boot_fit)) {
+      failed[b] <- TRUE
+      next
+    }
+
+    beta <- lme4::fixef(boot_fit)
+
+    # Record any unidentified/rank-deficient coefficients
+    if (!all(terms %in% names(beta))) {
+      failed[b] <- TRUE
+      next
+    }
+
+    boot_coefs[b, ] <- beta[terms]
+
+    singular[b] <- lme4::isSingular(boot_fit)
+
+    convergence[b] <- (
+      length(boot_fit@optinfo$conv$lme4$messages) > 0 ||
+      !is.null(boot_fit@optinfo$conv$opt) &&
+        boot_fit@optinfo$conv$opt != 0
+    )
+  }
+
+  # Successful bootstrap replicates
+  successful <- !failed
+
+  valid_coefs <- boot_coefs[
+    successful,
+    ,
+    drop = FALSE
+  ]
+
+  # Percentile confidence intervals
+  ci <- apply(
+    valid_coefs,
+    2,
+    quantile,
+    probs = c(0.025, 0.975),
+    na.rm = TRUE
+  )
+
+  results <- data.frame(
+    term = terms,
+    original_estimate = as.numeric(original_beta),
+    bootstrap_mean = colMeans(valid_coefs),
+    CI_lower = as.numeric(ci[1, ]),
+    CI_upper = as.numeric(ci[2, ]),
+    row.names = NULL
+  )
+
+  results$CI_excludes_zero <- (
+    results$CI_lower > 0 |
+    results$CI_upper < 0
+  )
+
+  list(
+    results = results,
+    diagnostics = data.frame(
+      requested = B,
+      successful = sum(successful),
+      failed = sum(failed),
+      singular_refits = sum(singular),
+      convergence_warnings = sum(convergence)
+    ),
+    coefficients = valid_coefs
+  )
+}
+
+# ------------------------------------------------------------
+# Run the two selected models
+# ------------------------------------------------------------
+
+active_boot <- cluster_bootstrap(
+  active_both_layers,
+  B = 500,
+  seed = 123
+)
+
+matching_boot <- cluster_bootstrap(
+  matching_societal,
+  B = 500,
+  seed = 456
+)
+
+# ------------------------------------------------------------
+# Inspect results
+# ------------------------------------------------------------
+
+active_boot$diagnostics
+matching_boot$diagnostics
+
+active_boot$results
+matching_boot$results
+
+
+
+
+
+#Log models all converge and do not show multicolinearity
+
+#doing some extra spline analyses 
+
+
+# ============================================================
+# AUDIT: Linearity of multilingual rate in logistic models
+# ============================================================
+
+library(splines)
+
+# Active-use outcome
+active_societal_spline <- update(
+  active_societal_log,
+  . ~ . - multilingual_rate_z +
+    ns(multilingual_rate_z, df = 3)
+)
+
+anova(
+  active_societal_log,
+  active_societal_spline,
+  test = "Chisq"
+)
+
+# Matching outcome
+matching_societal_spline <- update(
+  matching_societal_log,
+  . ~ . - multilingual_rate_z +
+    ns(multilingual_rate_z, df = 3)
+)
+
+anova(
+  matching_societal_log,
+  matching_societal_spline,
+  test = "Chisq"
+)
+
+
+```
+
